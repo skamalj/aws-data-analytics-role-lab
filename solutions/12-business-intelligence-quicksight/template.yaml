@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lab 12 reference solution: QuickSight Athena data source, SPICE dataset with calculated
+  fields over riverbend_bi.v_sales, row-level security by region, and a daily SPICE refresh.
+  (The analysis and dashboard are built in the console; see README.)
+
+Parameters:
+  LabStack: { Type: String, Default: cq-da-12 }
+  LakeBucket: { Type: String }
+  AuthorUserArn:
+    Type: String
+    Description: QuickSight author, e.g. arn:aws:quicksight:<region>:<account>:user/default/<name>
+
+Resources:
+  RlsRulesTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: riverbend_bi
+      TableInput:
+        Name: rls_rules
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${LakeBucket}/rls/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: username, Type: string }
+            - { Name: region, Type: string }
+
+  AthenaSource:
+    Type: AWS::QuickSight::DataSource
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      DataSourceId: !Sub "${LabStack}-athena"
+      Name: Riverbend Athena (cq-da-12)
+      Type: ATHENA
+      DataSourceParameters:
+        AthenaParameters: { WorkGroup: !Ref LabStack }
+      Permissions:
+        - Principal: !Ref AuthorUserArn
+          Actions:
+            - quicksight:DescribeDataSource
+            - quicksight:DescribeDataSourcePermissions
+            - quicksight:PassDataSource
+            - quicksight:UpdateDataSource
+            - quicksight:DeleteDataSource
+            - quicksight:UpdateDataSourcePermissions
+
+  RlsDataSet:
+    Type: AWS::QuickSight::DataSet
+    DependsOn: RlsRulesTable
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      DataSetId: !Sub "${LabStack}-rls-rules"
+      Name: Riverbend RLS rules
+      ImportMode: SPICE
+      PhysicalTableMap:
+        rules:
+          RelationalTable:
+            DataSourceArn: !GetAtt AthenaSource.Arn
+            Catalog: AwsDataCatalog
+            Schema: riverbend_bi
+            Name: rls_rules
+            InputColumns:
+              - { Name: username, Type: STRING }
+              - { Name: region, Type: STRING }
+      LogicalTableMap:
+        rules:
+          Alias: rules
+          Source: { PhysicalTableId: rules }
+          DataTransforms:
+            - RenameColumnOperation: { ColumnName: username, NewColumnName: UserName }
+      Permissions:
+        - Principal: !Ref AuthorUserArn
+          Actions:
+            - quicksight:DescribeDataSet
+            - quicksight:DescribeDataSetPermissions
+            - quicksight:PassDataSet
+            - quicksight:DescribeIngestion
+            - quicksight:ListIngestions
+            - quicksight:UpdateDataSet
+            - quicksight:DeleteDataSet
+            - quicksight:CreateIngestion
+            - quicksight:CancelIngestion
+            - quicksight:UpdateDataSetPermissions
+
+  SalesDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      DataSetId: !Sub "${LabStack}-sales"
+      Name: Riverbend sales 2024
+      ImportMode: SPICE
+      PhysicalTableMap:
+        vsales:
+          RelationalTable:
+            DataSourceArn: !GetAtt AthenaSource.Arn
+            Catalog: AwsDataCatalog
+            Schema: riverbend_bi
+            Name: v_sales
+            InputColumns:
+              - { Name: order_id, Type: STRING }
+              - { Name: order_ts, Type: DATETIME }
+              - { Name: order_date, Type: DATETIME }
+              - { Name: channel, Type: STRING }
+              - { Name: store_id, Type: STRING }
+              - { Name: region, Type: STRING }
+              - { Name: status, Type: STRING }
+              - { Name: quantity, Type: INTEGER }
+              - { Name: discount, Type: DECIMAL }
+              - { Name: total_amount, Type: DECIMAL }
+              - { Name: product_name, Type: STRING }
+              - { Name: category, Type: STRING }
+              - { Name: customer_id, Type: STRING }
+              - { Name: country, Type: STRING }
+              - { Name: city, Type: STRING }
+              - { Name: loyalty_tier, Type: STRING }
+      LogicalTableMap:
+        sales:
+          Alias: sales
+          Source: { PhysicalTableId: vsales }
+          DataTransforms:
+            - CreateColumnsOperation:
+                Columns:
+                  - ColumnId: completed_revenue
+                    ColumnName: completed_revenue
+                    Expression: "ifelse({status} = 'COMPLETED', {total_amount}, 0)"
+                  - ColumnId: is_returned
+                    ColumnName: is_returned
+                    Expression: "ifelse({status} = 'RETURNED', 1, 0)"
+            - TagColumnOperation:
+                ColumnName: country
+                Tags: [{ ColumnGeographicRole: COUNTRY }]
+            - TagColumnOperation:
+                ColumnName: city
+                Tags: [{ ColumnGeographicRole: CITY }]
+      RowLevelPermissionDataSet:
+        Arn: !GetAtt RlsDataSet.Arn
+        PermissionPolicy: GRANT_ACCESS
+        FormatVersion: VERSION_1
+        Status: ENABLED
+      Permissions:
+        - Principal: !Ref AuthorUserArn
+          Actions:
+            - quicksight:DescribeDataSet
+            - quicksight:DescribeDataSetPermissions
+            - quicksight:PassDataSet
+            - quicksight:DescribeIngestion
+            - quicksight:ListIngestions
+            - quicksight:UpdateDataSet
+            - quicksight:DeleteDataSet
+            - quicksight:CreateIngestion
+            - quicksight:CancelIngestion
+            - quicksight:UpdateDataSetPermissions
+
+  DailyRefresh:
+    Type: AWS::QuickSight::RefreshSchedule
+    Properties:
+      AwsAccountId: !Ref AWS::AccountId
+      DataSetId: !Sub "${LabStack}-sales"
+      Schedule:
+        ScheduleId: daily-full-refresh
+        RefreshType: FULL_REFRESH
+        ScheduleFrequency:
+          Interval: DAILY
+          TimeOfTheDay: "02:15"
+          TimeZone: UTC
+    DependsOn: SalesDataSet
+
+Outputs:
+  DataSourceArn: { Value: !GetAtt AthenaSource.Arn }
+  SalesDataSetArn: { Value: !GetAtt SalesDataSet.Arn }

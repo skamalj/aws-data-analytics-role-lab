@@ -24,7 +24,7 @@ Athena table riverbend_stream.clickstream (partition projection: enum × date ×
 
 | Decision | Reasoning |
 |---|---|
-| Kinesis Data Streams in front of Firehose | Lets you add more consumers later (Lab 10 reads the same stream with Lambda), replay 24 hours of data, and control ordering per partition key. Writing directly to a Firehose `DirectPut` stream is simpler if S3 is the only destination |
+| Kinesis Data Streams in front of Firehose | Lets you add more consumers later (for example a Lambda consumer, as in Lab 10), replay 24 hours of data, and control ordering per partition key. Writing directly to a Firehose `DirectPut` stream is simpler if S3 is the only destination |
 | Partition key `session_id` | High cardinality spreads records across shards evenly. Events for one session stay ordered on one shard |
 | Provisioned, 1 shard | 1 shard takes **1,000 records/s or 1 MB/s** of writes. At 20 events/s you pay $0.015/h. **On-demand** removes capacity planning, at a higher base price |
 | Dynamic partitioning on `event_type` | Analysts usually query one event type. Athena then reads only that prefix. Pick low-cardinality keys only: Firehose limits the number of active partitions |
