@@ -1,0 +1,87 @@
+diff -ruN a/missions/M6-guardrails/terraform/main.tf b/missions/M6-guardrails/terraform/main.tf
+--- a/missions/M6-guardrails/terraform/main.tf	2026-11-11 10:43:45.000000000 +0000
++++ b/missions/M6-guardrails/terraform/main.tf	2026-11-11 10:44:12.418708055 +0000
+@@ -62,9 +62,30 @@
+     }
+   }
+ 
++  # Unreleased products: block the topic itself, not just one codename.
++  topic_policy_config {
++    topics_config {
++      name       = "unreleased-products"
++      type       = "DENY"
++      definition = "Information about Riverbend products that have not launched yet, including their names, codenames, features, prices or launch dates."
++      examples = [
++        "Is there a new tent coming out soon?",
++        "What is project Ridgeback?",
++        "When does the next Summit model launch?",
++      ]
++    }
++  }
++
+   word_policy_config {
+-    words_config { text = "Ridgeback" }
+-    managed_word_lists_config { type = "PROFANITY" }
++    words_config {
++      text = "Ridgeback"
++    }
++    words_config {
++      text = "Summit Pro Ultra"
++    }
++    managed_word_lists_config {
++      type = "PROFANITY"
++    }
+   }
+ 
+   sensitive_information_policy_config {
+@@ -72,7 +93,7 @@
+       type           = "EMAIL"
+       action         = "ANONYMIZE"
+       input_enabled  = true
+-      output_enabled = false
++      output_enabled = true
+     }
+     pii_entities_config {
+       type   = "PHONE"
+@@ -85,7 +106,7 @@
+     regexes_config {
+       name        = "staff_discount_code"
+       description = "Riverbend staff discount codes"
+-      pattern     = "RB-[0-9]{4}"
++      pattern     = "RB-[A-Z0-9]{5,10}"
+       action      = "ANONYMIZE"
+     }
+   }
+@@ -97,6 +118,12 @@
+   description   = "Initial release"
+ }
+ 
++# Versions are immutable snapshots: the fixes above only reach the agent through a NEW version.
++resource "aws_bedrock_guardrail_version" "v2" {
++  guardrail_arn = aws_bedrock_guardrail.trail_desk.guardrail_arn
++  description   = "Deny unreleased-products topic, full discount-code pattern, e-mail masking on output"
++}
++
+ # ----------------------------------------------------------------- agent
+ data "aws_iam_policy_document" "agent" {
+   statement {
+@@ -147,7 +174,7 @@
+     MODEL_ID          = var.model_id
+     INTERNAL_CONTEXT  = local.internal_notes
+     GUARDRAIL_ID      = aws_bedrock_guardrail.trail_desk.guardrail_id
+-    GUARDRAIL_VERSION = aws_bedrock_guardrail_version.v1.version
++    GUARDRAIL_VERSION = aws_bedrock_guardrail_version.v2.version
+   }
+ 
+   depends_on = [aws_iam_role_policy.agent]
+diff -ruN a/missions/M6-guardrails/terraform/outputs.tf b/missions/M6-guardrails/terraform/outputs.tf
+--- a/missions/M6-guardrails/terraform/outputs.tf	2026-11-11 10:43:45.000000000 +0000
++++ b/missions/M6-guardrails/terraform/outputs.tf	2026-11-11 10:44:12.418866647 +0000
+@@ -1,6 +1,6 @@
+ output "runtime_arn" { value = aws_bedrockagentcore_agent_runtime.trail_desk.agent_runtime_arn }
+ output "auth_mode" { value = "iam" }
+ output "guardrail_id" { value = aws_bedrock_guardrail.trail_desk.guardrail_id }
+-output "guardrail_version_in_use" { value = aws_bedrock_guardrail_version.v1.version }
++output "guardrail_version_in_use" { value = aws_bedrock_guardrail_version.v2.version }
+ output "runtime_role_name" { value = module.base.role_name }
+ output "log_group_hint" { value = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.trail_desk.agent_runtime_id}-DEFAULT" }

@@ -1,5 +1,8 @@
 # AWS Data Analytics Role Labs (self-hosted)
 
+> Also in this repo: [**Agentic AI Demonstrated: break-fix missions**](agentic-ai-demonstrated/README.md), six Terraform
+> missions on Amazon Bedrock AgentCore (identity, gateway/MCP, knowledge bases, memory, private networking, guardrails).
+
 Twelve hands-on labs modelled on the **AWS Cloud Quest: Data Analytics** role, built to run in
 **your own AWS account**. Each lab has three parts:
 

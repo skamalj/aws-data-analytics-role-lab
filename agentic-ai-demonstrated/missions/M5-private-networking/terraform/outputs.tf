@@ -1,0 +1,10 @@
+output "runtime_arn" { value = aws_bedrockagentcore_agent_runtime.trail_desk.agent_runtime_arn }
+output "auth_mode" { value = "iam" }
+output "vpc_id" { value = aws_vpc.agents.id }
+output "private_subnet_cidrs" { value = aws_subnet.private[*].cidr_block }
+output "agent_security_group" { value = aws_security_group.agent.id }
+output "endpoint_security_group" { value = aws_security_group.endpoints.id }
+output "route_table_id" { value = aws_route_table.private.id }
+output "stores_table" { value = aws_dynamodb_table.stores.name }
+output "runtime_role_name" { value = module.base.role_name }
+output "log_group_hint" { value = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.trail_desk.agent_runtime_id}-DEFAULT" }

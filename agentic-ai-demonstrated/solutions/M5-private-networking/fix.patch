@@ -1,0 +1,37 @@
+diff -ruN a/missions/M5-private-networking/terraform/main.tf b/missions/M5-private-networking/terraform/main.tf
+--- a/missions/M5-private-networking/terraform/main.tf	2026-11-11 10:42:22.000000000 +0000
++++ b/missions/M5-private-networking/terraform/main.tf	2026-11-11 10:42:27.055736901 +0000
+@@ -60,11 +60,11 @@
+   description = "Interface endpoints"
+   vpc_id      = aws_vpc.agents.id
+   ingress {
+-    description = "HTTPS from the agent subnets"
+-    from_port   = 443
+-    to_port     = 443
+-    protocol    = "tcp"
+-    cidr_blocks = ["10.20.100.0/24"]
++    description     = "HTTPS from the agent runtime ENIs"
++    from_port       = 443
++    to_port         = 443
++    protocol        = "tcp"
++    security_groups = [aws_security_group.agent.id]
+   }
+ }
+ 
+@@ -75,7 +75,7 @@
+   vpc_endpoint_type   = "Interface"
+   subnet_ids          = aws_subnet.private[*].id
+   security_group_ids  = [aws_security_group.endpoints.id]
+-  private_dns_enabled = false
++  private_dns_enabled = true # bedrock-runtime.<region>.amazonaws.com resolves to the endpoint ENIs
+   tags                = { Name = "${local.p}-bedrock-runtime" }
+ }
+ 
+@@ -84,6 +84,7 @@
+   vpc_id            = aws_vpc.agents.id
+   service_name      = "com.amazonaws.${var.region}.dynamodb"
+   vpc_endpoint_type = "Gateway"
++  route_table_ids   = [aws_route_table.private.id] # adds the DynamoDB prefix-list route
+   tags              = { Name = "${local.p}-dynamodb" }
+ }
+ 
