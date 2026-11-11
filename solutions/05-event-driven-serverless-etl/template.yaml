@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lab 05 reference solution: S3 Object Created -> EventBridge -> Lambda -> Glue job,
+  curated Parquet table with partition projection, and failure alerts via SNS.
+
+Parameters:
+  LabStack:
+    Type: String
+    Default: cq-da-05
+  LandingBucket: { Type: String }
+  CuratedBucket: { Type: String }
+  ScriptsBucket: { Type: String }
+  GlueJobRoleArn: { Type: String }
+  TriggerLambdaRoleArn: { Type: String }
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional e-mail address for job-failure alerts
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Resources:
+  OrdersEtlJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${LabStack}-orders-etl"
+      Role: !Ref GlueJobRoleArn
+      GlueVersion: "5.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 15
+      MaxRetries: 0
+      ExecutionProperty:
+        MaxConcurrentRuns: 10       # several files can land at once
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${ScriptsBucket}/glue/etl_orders.py"
+      DefaultArguments:
+        --curated_bucket: !Ref CuratedBucket
+        --job-bookmark-option: job-bookmark-disable
+        --enable-metrics: "true"
+        --enable-continuous-cloudwatch-log: "true"
+
+  CuratedOrdersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: riverbend_curated
+      TableInput:
+        Name: orders
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.order_date.type: date
+          projection.order_date.format: yyyy-MM-dd
+          projection.order_date.range: "2024-01-01,NOW"
+          projection.order_date.interval: "1"
+          projection.order_date.interval.unit: DAYS
+          storage.location.template: !Sub "s3://${CuratedBucket}/orders/order_date=${!order_date}/"
+        PartitionKeys:
+          - { Name: order_date, Type: date }
+        StorageDescriptor:
+          Location: !Sub "s3://${CuratedBucket}/orders/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: order_ts, Type: timestamp }
+            - { Name: customer_id, Type: string }
+            - { Name: product_id, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: unit_price, Type: double }
+            - { Name: discount, Type: double }
+            - { Name: total_amount, Type: double }
+            - { Name: channel, Type: string }
+            - { Name: store_id, Type: string }
+            - { Name: region, Type: string }
+            - { Name: status, Type: string }
+            - { Name: source_file, Type: string }
+            - { Name: ingest_ts, Type: timestamp }
+
+  QuarantineTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: riverbend_curated
+      TableInput:
+        Name: orders_quarantine
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: json }
+        StorageDescriptor:
+          Location: !Sub "s3://${CuratedBucket}/quarantine/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: _corrupt, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: total_amount, Type: double }
+            - { Name: source_file, Type: string }
+            - { Name: quarantined_at, Type: string }
+
+  TriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${LabStack}-start-etl"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      Role: !Ref TriggerLambdaRoleArn
+      Environment:
+        Variables:
+          JOB_NAME: !Ref OrdersEtlJob
+      Code:
+        ZipFile: |
+          import json, os
+          import boto3
+          glue = boto3.client("glue")
+
+          def handler(event, context):
+              detail = event["detail"]
+              bucket, key = detail["bucket"]["name"], detail["object"]["key"]
+              run = glue.start_job_run(
+                  JobName=os.environ["JOB_NAME"],
+                  Arguments={"--source_bucket": bucket, "--source_key": key},
+              )
+              print(json.dumps({"bucket": bucket, "key": key, "job_run_id": run["JobRunId"]}))
+              return run["JobRunId"]
+
+  ObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${LabStack}-orders-landed"
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [!Ref LandingBucket]
+          object:
+            key: [{ wildcard: "incoming/orders/*.csv" }]
+      Targets:
+        - Id: start-etl
+          Arn: !GetAtt TriggerFunction.Arn
+          RetryPolicy: { MaximumRetryAttempts: 4, MaximumEventAgeInSeconds: 3600 }
+
+  AllowEventBridge:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TriggerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ObjectCreatedRule.Arn
+
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${LabStack}-etl-alerts"
+
+  AlertsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref AlertsTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref AlertsTopic
+
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  JobFailedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${LabStack}-etl-failed"
+      EventPattern:
+        source: [aws.glue]
+        detail-type: [Glue Job State Change]
+        detail:
+          jobName: [!Ref OrdersEtlJob]
+          state: [FAILED, TIMEOUT, ERROR]
+      Targets:
+        - Id: sns
+          Arn: !Ref AlertsTopic
+
+Outputs:
+  GlueJobName: { Value: !Ref OrdersEtlJob }
+  TriggerFunctionName: { Value: !Ref TriggerFunction }
+  AlertsTopicArn: { Value: !Ref AlertsTopic }

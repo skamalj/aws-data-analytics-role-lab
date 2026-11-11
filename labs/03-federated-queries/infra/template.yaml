@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 03 Federated Queries. Starting environment:
+  a DynamoDB table holding CRM customer profiles, an S3 data lake holding orders
+  (already cataloged in Glue), an Athena workgroup and a spill bucket for connectors.
+
+Resources:
+  CustomerProfilesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: riverbend_customer_profiles
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: customer_id, AttributeType: S }
+      KeySchema:
+        - { AttributeName: customer_id, KeyType: HASH }
+
+  LakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-lake-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  SpillBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-spill-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire-spill, Status: Enabled, ExpirationInDays: 1 }
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-athena-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AWS::StackName
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        EngineVersion:
+          SelectedEngineVersion: Athena engine version 3
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucket}/results/"
+
+  LakeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: riverbend_fed
+        Description: Orders in S3, to be joined with CRM data in DynamoDB
+
+  OrdersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref LakeDatabase
+      TableInput:
+        Name: orders
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${LakeBucket}/orders/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: order_ts, Type: timestamp }
+            - { Name: customer_id, Type: string }
+            - { Name: product_id, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: unit_price, Type: double }
+            - { Name: discount, Type: double }
+            - { Name: total_amount, Type: double }
+            - { Name: channel, Type: string }
+            - { Name: store_id, Type: string }
+            - { Name: region, Type: string }
+            - { Name: status, Type: string }
+
+Outputs:
+  DynamoDBTable: { Value: !Ref CustomerProfilesTable }
+  LakeBucket: { Value: !Ref LakeBucket }
+  SpillBucket: { Value: !Ref SpillBucket }
+  AthenaResultsBucket: { Value: !Ref AthenaResultsBucket }
+  AthenaWorkGroup: { Value: !Ref AthenaWorkGroup }
+  GlueDatabase: { Value: !Ref LakeDatabase }

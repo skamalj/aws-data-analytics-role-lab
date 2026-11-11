@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 02 Querying the Data Lake. Starting environment:
+  raw CSV orders for a full year (about 16 MB), a curated bucket, a Glue database whose
+  tables are already defined over the raw data, and an Athena workgroup.
+
+Resources:
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-raw-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CuratedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-curated-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-athena-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AWS::StackName
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucket}/results/"
+
+  LakeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: riverbend_lake
+        Description: Riverbend data lake (raw tables pre-defined, curated tables are yours to build)
+
+  OrdersCsvTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref LakeDatabase
+      TableInput:
+        Name: orders_csv
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${RawBucket}/orders/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: order_ts, Type: timestamp }
+            - { Name: customer_id, Type: string }
+            - { Name: product_id, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: unit_price, Type: double }
+            - { Name: discount, Type: double }
+            - { Name: total_amount, Type: double }
+            - { Name: channel, Type: string }
+            - { Name: store_id, Type: string }
+            - { Name: region, Type: string }
+            - { Name: status, Type: string }
+
+  CustomersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref LakeDatabase
+      TableInput:
+        Name: customers
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${RawBucket}/customers/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: customer_id, Type: string }
+            - { Name: first_name, Type: string }
+            - { Name: last_name, Type: string }
+            - { Name: email, Type: string }
+            - { Name: phone, Type: string }
+            - { Name: city, Type: string }
+            - { Name: country, Type: string }
+            - { Name: region, Type: string }
+            - { Name: signup_date, Type: date }
+            - { Name: loyalty_tier, Type: string }
+
+  ProductsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref LakeDatabase
+      TableInput:
+        Name: products
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: json }
+        StorageDescriptor:
+          Location: !Sub "s3://${RawBucket}/products/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+          Columns:
+            - { Name: product_id, Type: string }
+            - { Name: product_name, Type: string }
+            - { Name: category, Type: string }
+            - { Name: unit_price, Type: double }
+
+Outputs:
+  RawBucket: { Value: !Ref RawBucket }
+  CuratedBucket: { Value: !Ref CuratedBucket }
+  AthenaResultsBucket: { Value: !Ref AthenaResultsBucket }
+  AthenaWorkGroup: { Value: !Ref AthenaWorkGroup }
+  GlueDatabase: { Value: !Ref LakeDatabase }
