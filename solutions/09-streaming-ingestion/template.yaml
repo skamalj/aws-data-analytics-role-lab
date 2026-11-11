@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lab 09 reference solution: Kinesis data stream + Amazon Data Firehose delivery to S3
+  with dynamic partitioning (event_type) and time-based prefixes, GZIP, and error output.
+
+Parameters:
+  StreamName: { Type: String, Default: riverbend-clickstream }
+  RawEventsBucket: { Type: String }
+  FirehoseRoleArn: { Type: String }
+
+Resources:
+  ClickStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Ref StreamName
+      StreamModeDetails: { StreamMode: PROVISIONED }
+      ShardCount: 1
+      RetentionPeriodHours: 24
+      StreamEncryption: { EncryptionType: KMS, KeyId: alias/aws/kinesis }
+
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/kinesisfirehose/riverbend-clickstream-to-s3
+      RetentionInDays: 7
+
+  FirehoseLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: S3Delivery
+
+  ToS3:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: riverbend-clickstream-to-s3
+      DeliveryStreamType: KinesisStreamAsSource
+      KinesisStreamSourceConfiguration:
+        KinesisStreamARN: !GetAtt ClickStream.Arn
+        RoleARN: !Ref FirehoseRoleArn
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Sub "arn:aws:s3:::${RawEventsBucket}"
+        RoleARN: !Ref FirehoseRoleArn
+        Prefix: "events/event_type=!{partitionKeyFromQuery:event_type}/dt=!{timestamp:yyyy-MM-dd}/hour=!{timestamp:HH}/"
+        ErrorOutputPrefix: "errors/!{firehose:error-output-type}/dt=!{timestamp:yyyy-MM-dd}/"
+        CompressionFormat: GZIP
+        BufferingHints: { IntervalInSeconds: 60, SizeInMBs: 64 }   # 64 MB is the minimum with dynamic partitioning
+        DynamicPartitioningConfiguration:
+          Enabled: true
+          RetryOptions: { DurationInSeconds: 300 }
+        ProcessingConfiguration:
+          Enabled: true
+          Processors:
+            - Type: MetadataExtraction
+              Parameters:
+                - { ParameterName: MetadataExtractionQuery, ParameterValue: "{event_type: .event_type}" }
+                - { ParameterName: JsonParsingEngine, ParameterValue: JQ-1.6 }
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: !Ref FirehoseLogStream
+
+Outputs:
+  StreamArn: { Value: !GetAtt ClickStream.Arn }
+  DeliveryStreamName: { Value: !Ref ToS3 }

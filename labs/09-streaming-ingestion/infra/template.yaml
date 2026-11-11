@@ -1,0 +1,268 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 09 Streaming Ingestion. Starting environment:
+  a VPC with an EC2 instance running a clickstream producer (systemd service) that
+  writes to a Kinesis data stream named riverbend-clickstream as soon as it exists,
+  a raw-events bucket, a Firehose delivery role, a Glue database and an Athena workgroup.
+
+Parameters:
+  StreamName:
+    Type: String
+    Default: riverbend-clickstream
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.90.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Ref AWS::StackName }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway }
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.90.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public" }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc }
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnet, RouteTableId: !Ref PublicRouteTable }
+
+  ProducerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Producer instance - no inbound access (use SSM Session Manager)
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+
+  ProducerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-producer-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: put-to-stream
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:PutRecord, kinesis:PutRecords, kinesis:DescribeStreamSummary]
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${StreamName}"
+
+  ProducerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref ProducerRole]
+
+  ProducerInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !Ref LatestAmi
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref ProducerSecurityGroup]
+      IamInstanceProfile: !Ref ProducerInstanceProfile
+      MetadataOptions: { HttpTokens: required }
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-clickstream-producer" }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -eux
+          dnf install -y python3-boto3
+          mkdir -p /opt/producer
+          cat > /etc/clickstream-producer.env <<'ENV'
+          STREAM_NAME=${StreamName}
+          AWS_REGION=${AWS::Region}
+          RATE=20
+          ENV
+          cat > /opt/producer/producer.py <<'PY'
+          """Riverbend web/mobile clickstream simulator. RATE = events per second."""
+          import json, os, random, time, uuid
+          from datetime import datetime, timezone
+          import boto3
+          from botocore.exceptions import ClientError
+
+          STREAM = os.environ["STREAM_NAME"]
+          RATE = int(os.environ.get("RATE", "20"))
+          k = boto3.client("kinesis", region_name=os.environ["AWS_REGION"])
+          PRODUCTS = {f"P{100 + i}": p for i, p in enumerate(
+              [189, 349, 129, 159, 119, 49, 139, 79, 69, 89, 259, 99, 59, 74, 44, 64, 219, 19], start=1)}
+          REGIONS = ["NA", "EU", "APAC", "LATAM"]
+
+          def event():
+              etype = random.choices(["page_view", "search", "add_to_cart", "checkout"], [70, 10, 15, 5])[0]
+              pid = random.choice(list(PRODUCTS))
+              e = {"event_id": str(uuid.uuid4()),
+                   "event_ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                   "event_type": etype,
+                   "customer_id": "C%05d" % random.randint(1, 500),
+                   "session_id": "sess-%d" % random.randint(1, 5000),
+                   "product_id": pid,
+                   "device": random.choice(["ios", "android", "desktop"]),
+                   "region": random.choice(REGIONS)}
+              if etype in ("add_to_cart", "checkout"):
+                  e["price"] = PRODUCTS[pid]
+              if etype == "search":
+                  e["query"] = random.choice(["tent", "boots", "rain jacket", "stove", "rope"])
+              return e
+
+          while True:
+              try:
+                  k.describe_stream_summary(StreamName=STREAM)
+                  break
+              except ClientError as err:
+                  print("waiting for stream %s: %s" % (STREAM, err.response["Error"]["Code"]), flush=True)
+                  time.sleep(30)
+
+          print("producing %d events/s to %s" % (RATE, STREAM), flush=True)
+          sent = throttled = 0
+          while True:
+              t0 = time.time()
+              recs = []
+              for _ in range(RATE):
+                  e = event()
+                  recs.append({"Data": (json.dumps(e) + "\n").encode(), "PartitionKey": e["session_id"]})
+              for i in range(0, len(recs), 500):
+                  try:
+                      r = k.put_records(StreamName=STREAM, Records=recs[i:i + 500])
+                      throttled += r["FailedRecordCount"]
+                      sent += len(recs[i:i + 500]) - r["FailedRecordCount"]
+                  except ClientError as err:
+                      print("put_records error: %s" % err, flush=True)
+                      time.sleep(5)
+              if int(t0) % 60 == 0:
+                  print("sent=%d throttled=%d" % (sent, throttled), flush=True)
+              time.sleep(max(0, 1 - (time.time() - t0)))
+          PY
+          cat > /etc/systemd/system/clickstream-producer.service <<'UNIT'
+          [Unit]
+          Description=Riverbend clickstream producer
+          After=network-online.target
+          [Service]
+          EnvironmentFile=/etc/clickstream-producer.env
+          ExecStart=/usr/bin/python3 /opt/producer/producer.py
+          Restart=always
+          RestartSec=10
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable --now clickstream-producer
+
+  RawEventsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-events-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-firehose-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: firehose.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "sts:ExternalId": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: stream-to-s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:DescribeStream, kinesis:DescribeStreamSummary, kinesis:GetShardIterator,
+                         kinesis:GetRecords, kinesis:ListShards]
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${StreamName}"
+              - Effect: Allow
+                Action: [s3:AbortMultipartUpload, s3:GetBucketLocation, s3:GetObject, s3:ListBucket,
+                         s3:ListBucketMultipartUploads, s3:PutObject]
+                Resource:
+                  - !GetAtt RawEventsBucket.Arn
+                  - !Sub "${RawEventsBucket.Arn}/*"
+              - Effect: Allow
+                Action: [logs:PutLogEvents, logs:CreateLogStream, logs:CreateLogGroup]
+                Resource: "*"
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-athena-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AWS::StackName
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucket}/results/"
+
+  StreamDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: riverbend_stream
+
+Outputs:
+  StreamName: { Value: !Ref StreamName }
+  ProducerInstanceId: { Value: !Ref ProducerInstance }
+  RawEventsBucket: { Value: !Ref RawEventsBucket }
+  FirehoseRoleArn: { Value: !GetAtt FirehoseRole.Arn }
+  AthenaWorkGroup: { Value: !Ref AthenaWorkGroup }
+  GlueDatabase: { Value: !Ref StreamDatabase }
