@@ -1,0 +1,36 @@
+diff -ruN a/missions/M4-agentcore-memory/terraform/main.tf b/missions/M4-agentcore-memory/terraform/main.tf
+--- a/missions/M4-agentcore-memory/terraform/main.tf	2026-11-11 10:40:45.000000000 +0000
++++ b/missions/M4-agentcore-memory/terraform/main.tf	2026-11-11 10:40:45.556638596 +0000
+@@ -29,6 +29,14 @@
+   namespace_templates = ["/customers/{actorId}/sessions/{sessionId}"]
+ }
+ 
++# Long-term facts about the customer (preferences, sizes, budget), shared by all their sessions.
++resource "aws_bedrockagentcore_memory_strategy" "preferences" {
++  memory_id           = aws_bedrockagentcore_memory.customers.id
++  name                = "customer_preferences"
++  type                = "USER_PREFERENCE"
++  namespace_templates = ["/customers/{actorId}/preferences"]
++}
++
+ # ----------------------------------------------------------------- agent
+ data "aws_iam_policy_document" "agent" {
+   statement {
+@@ -41,7 +49,7 @@
+   }
+   statement {
+     sid       = "Memory"
+-    actions   = ["bedrock-agentcore:CreateEvent", "bedrock-agentcore:ListEvents", "bedrock-agentcore:GetEvent"]
++    actions   = ["bedrock-agentcore:CreateEvent", "bedrock-agentcore:ListEvents", "bedrock-agentcore:GetEvent", "bedrock-agentcore:RetrieveMemoryRecords"]
+     resources = [aws_bedrockagentcore_memory.customers.arn]
+   }
+ }
+@@ -78,7 +86,7 @@
+   environment_variables = {
+     MODEL_ID         = var.model_id
+     MEMORY_ID        = aws_bedrockagentcore_memory.customers.id
+-    MEMORY_NAMESPACE = "/customers/{sessionId}/preferences"
++    MEMORY_NAMESPACE = "/customers/{actorId}/preferences"
+   }
+ 
+   depends_on = [aws_iam_role_policy.agent]

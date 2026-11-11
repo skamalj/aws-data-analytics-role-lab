@@ -1,0 +1,34 @@
+diff -ruN a/missions/M3-knowledge-base-on-s3-vectors/terraform/main.tf b/missions/M3-knowledge-base-on-s3-vectors/terraform/main.tf
+--- a/missions/M3-knowledge-base-on-s3-vectors/terraform/main.tf	2026-11-11 10:38:55.000000000 +0000
++++ b/missions/M3-knowledge-base-on-s3-vectors/terraform/main.tf	2026-11-11 10:39:11.606878443 +0000
+@@ -49,6 +49,12 @@
+   data_type          = "float32"
+   dimension          = 1024
+   distance_metric    = "cosine"
++
++  # Bedrock stores each chunk's text and metadata as vector metadata. Filterable metadata is
++  # limited to 2 KB per vector, so these two keys must be non-filterable.
++  metadata_configuration {
++    non_filterable_metadata_keys = ["AMAZON_BEDROCK_TEXT", "AMAZON_BEDROCK_METADATA"]
++  }
+ }
+ 
+ # ----------------------------------------------------------------- knowledge base
+@@ -131,7 +137,7 @@
+     type = "S3"
+     s3_configuration {
+       bucket_arn         = aws_s3_bucket.docs.arn
+-      inclusion_prefixes = ["manuals/"]
++      inclusion_prefixes = ["library/"]
+     }
+   }
+ 
+@@ -158,7 +164,7 @@
+   }
+   statement {
+     sid       = "SearchManuals"
+-    actions   = ["bedrock:RetrieveAndGenerate"]
++    actions   = ["bedrock:Retrieve"]
+     resources = [aws_bedrockagent_knowledge_base.manuals.arn]
+   }
+ }

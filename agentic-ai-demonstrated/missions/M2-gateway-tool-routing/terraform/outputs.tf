@@ -1,0 +1,9 @@
+output "runtime_arn" { value = aws_bedrockagentcore_agent_runtime.trail_desk.agent_runtime_arn }
+output "auth_mode" { value = "iam" }
+output "gateway_id" { value = aws_bedrockagentcore_gateway.tools.gateway_id }
+output "gateway_url" { value = aws_bedrockagentcore_gateway.tools.gateway_url }
+output "gateway_role_name" { value = aws_iam_role.gateway.name }
+output "orders_function" { value = aws_lambda_function.orders.function_name }
+output "inventory_function" { value = aws_lambda_function.inventory.function_name }
+output "runtime_role_name" { value = module.base.role_name }
+output "log_group_hint" { value = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.trail_desk.agent_runtime_id}-DEFAULT" }

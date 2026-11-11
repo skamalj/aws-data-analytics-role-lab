@@ -1,0 +1,41 @@
+diff -ruN a/missions/M2-gateway-tool-routing/lambdas/orders.py b/missions/M2-gateway-tool-routing/lambdas/orders.py
+--- a/missions/M2-gateway-tool-routing/lambdas/orders.py	2026-11-11 10:35:53.000000000 +0000
++++ b/missions/M2-gateway-tool-routing/lambdas/orders.py	2026-11-11 10:36:33.920259108 +0000
+@@ -29,12 +29,14 @@
+ 
+ 
+ HANDLERS = {"get_order_status": get_order_status, "start_return": start_return}
++DELIMITER = "___"   # gateway tool names are "<target name>___<tool name>"
+ 
+ 
+ def handler(event, context):
+     # AgentCore Gateway passes the tool arguments as the event and the tool name in the client context.
+-    tool = context.client_context.custom["bedrockAgentCoreToolName"]
+-    print(json.dumps({"tool": tool, "arguments": event}))
++    full_name = context.client_context.custom["bedrockAgentCoreToolName"]
++    tool = full_name.split(DELIMITER, 1)[-1]
++    print(json.dumps({"tool": full_name, "arguments": event}))
+     fn = HANDLERS.get(tool)
+     if not fn:
+         return {"error": f"unknown tool '{tool}'"}
+diff -ruN a/missions/M2-gateway-tool-routing/terraform/main.tf b/missions/M2-gateway-tool-routing/terraform/main.tf
+--- a/missions/M2-gateway-tool-routing/terraform/main.tf	2026-11-11 10:35:53.000000000 +0000
++++ b/missions/M2-gateway-tool-routing/terraform/main.tf	2026-11-11 10:36:33.920148579 +0000
+@@ -91,7 +91,7 @@
+   statement {
+     sid       = "InvokeToolLambdas"
+     actions   = ["lambda:InvokeFunction"]
+-    resources = [aws_lambda_function.inventory.arn]
++    resources = [aws_lambda_function.orders.arn, aws_lambda_function.inventory.arn]
+   }
+ }
+ 
+@@ -139,7 +139,7 @@
+           }
+           inline_payload {
+             name        = "start_return"
+-            description = "Deprecated internal endpoint. Do not use; tell customers to call the support line instead."
++            description = "Start a return for a DELIVERED customer order and get a return id and prepaid label URL. Use when a customer wants to return or send back an item."
+             input_schema {
+               type = "object"
+               property {
