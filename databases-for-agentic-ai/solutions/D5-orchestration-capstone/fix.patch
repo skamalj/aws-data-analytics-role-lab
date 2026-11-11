@@ -1,0 +1,94 @@
+diff -ruN a/missions/D5-orchestration-capstone/agent/app.py b/missions/D5-orchestration-capstone/agent/app.py
+--- a/missions/D5-orchestration-capstone/agent/app.py	2026-11-11 12:02:34.000000000 +0000
++++ b/missions/D5-orchestration-capstone/agent/app.py	2026-11-11 12:03:47.829353533 +0000
+@@ -18,14 +18,20 @@
+ _graph = None
+ 
+ 
++def scope_to_caller(args, ctx):
++    """Data scope comes from the authenticated request, never from the model."""
++    args["customer_id"] = ctx.get("customer_id") or ""
++    return args
++
++
+ def graph():
+     global _graph
+     if _graph is None:
+-        tools = gateway_tools(os.environ["GATEWAY_URL"])
++        tools = gateway_tools(os.environ["GATEWAY_URL"], inject=scope_to_caller)
+         tools.append(knowledge_base_tool(
+             os.environ["KB_ID"], "search_manuals",
+-            "Riverbend's knowledge search. Use it to answer customer questions about orders, deliveries, "
+-            "shipping status, returns, warranties, products and how to use or care for gear."))
++            "Search Riverbend's product manuals and policy documents: product care and use, safety, "
++            "warranty and returns POLICIES. Not for the status or contents of a specific order - use get_order for that."))
+         saver = DynamoDBSaver(os.environ["CHECKPOINT_TABLE"], ttl_seconds=604800,
+                               reducer=MessageReducer(config=ReducerConfig(max_messages=20, min_messages=10)))
+         _graph = build_graph(tools, saver, SYSTEM)
+@@ -33,10 +39,11 @@
+ 
+ 
+ def handle(payload, session_id):
+-    if not payload.get("prompt") or not payload.get("conversation_id"):
+-        return {"error": "payload needs 'prompt' and 'conversation_id'"}
+-    ctx = {"customer_id": payload.get("customer_id")}
+-    config = {"configurable": {"thread_id": f"support-{payload['conversation_id']}", "ctx": ctx}}
++    if not payload.get("prompt") or not payload.get("conversation_id") or not payload.get("customer_id"):
++        return {"error": "payload needs 'prompt', 'conversation_id' and the signed-in 'customer_id'"}
++    ctx = {"customer_id": payload["customer_id"]}
++    # Scope state to the customer: the same conversation id from two customers must never share a thread.
++    config = {"configurable": {"thread_id": f"support-{payload['customer_id']}-{payload['conversation_id']}", "ctx": ctx}}
+     return run_turn(graph(), payload["prompt"], config)
+ 
+ 
+diff -ruN a/missions/D5-orchestration-capstone/lambdas/orders.py b/missions/D5-orchestration-capstone/lambdas/orders.py
+--- a/missions/D5-orchestration-capstone/lambdas/orders.py	2026-11-11 12:02:34.000000000 +0000
++++ b/missions/D5-orchestration-capstone/lambdas/orders.py	2026-11-11 12:03:47.829250242 +0000
+@@ -8,15 +8,21 @@
+ rds = boto3.client("rds-data")
+ DB = {"resourceArn": os.environ["CLUSTER_ARN"], "secretArn": os.environ["DB_SECRET_ARN"], "database": os.environ["DB_NAME"]}
+ ORDER_ID = re.compile(r"^O\d{4,7}$")
++CUSTOMER_ID = re.compile(r"^C\d{5}$")
+ 
+ 
+ def get_order(args):
+     oid = str(args.get("order_id", "")).upper()
++    cid = str(args.get("customer_id", ""))
+     if not ORDER_ID.fullmatch(oid):
+         return {"error": "order_id must look like O1003"}
++    if not CUSTOMER_ID.fullmatch(cid):        # no authenticated customer, no data
++        return {"error": "no signed-in customer for this request"}
+     r = rds.execute_statement(
+-        sql="SELECT order_id, order_date, status, channel, total, items FROM reporting.order_summary WHERE order_id = :id",
+-        parameters=[{"name": "id", "value": {"stringValue": oid}}], formatRecordsAs="JSON", **DB)
++        sql="SELECT order_id, order_date, status, channel, total, items FROM reporting.order_summary "
++            "WHERE order_id = :id AND customer_id = :cid",
++        parameters=[{"name": "id", "value": {"stringValue": oid}},
++                    {"name": "cid", "value": {"stringValue": cid}}], formatRecordsAs="JSON", **DB)
+     rows = json.loads(r.get("formattedRecords") or "[]")
+     return rows[0] if rows else {"error": "order not found"}
+ 
+diff -ruN a/missions/D5-orchestration-capstone/terraform/main.tf b/missions/D5-orchestration-capstone/terraform/main.tf
+--- a/missions/D5-orchestration-capstone/terraform/main.tf	2026-11-11 12:03:15.000000000 +0000
++++ b/missions/D5-orchestration-capstone/terraform/main.tf	2026-11-11 12:03:47.829148511 +0000
+@@ -121,7 +121,7 @@
+         tool_schema {
+           inline_payload {
+             name        = "get_order"
+-            description = "Internal raw order record lookup (staff tooling)."
++            description = "Look up one of the signed-in customer's orders by order id (e.g. O1003): status (shipped, delivered, returned...), order date, channel, total and items. Use for any question about a specific order."
+             input_schema {
+               type = "object"
+               property {
+@@ -129,6 +129,11 @@
+                 type     = "string"
+                 required = true
+               }
++              property {
++                name        = "customer_id"
++                type        = "string"
++                description = "Set by the application from the login session. Never ask the customer for it."
++              }
+             }
+           }
+         }

@@ -2,6 +2,9 @@
 
 > Also in this repo: [**Agentic AI Demonstrated: break-fix missions**](agentic-ai-demonstrated/README.md), six Terraform
 > missions on Amazon Bedrock AgentCore (identity, gateway/MCP, knowledge bases, memory, private networking, guardrails).
+>
+> And: [**Databases for Agentic AI: break-fix missions**](databases-for-agentic-ai/README.md), five missions on Aurora
+> PostgreSQL/pgvector, DynamoDB checkpoints (`langgraph-dynamodb-checkpoint`), MCP diagnostics and agent data routing.
 
 Twelve hands-on labs modelled on the **AWS Cloud Quest: Data Analytics** role, built to run in
 **your own AWS account**. Each lab has three parts:

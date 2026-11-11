@@ -1,0 +1,112 @@
+diff -ruN a/missions/D4-mcp-diagnostics/mcp/server.py b/missions/D4-mcp-diagnostics/mcp/server.py
+--- a/missions/D4-mcp-diagnostics/mcp/server.py	2026-11-11 11:59:15.000000000 +0000
++++ b/missions/D4-mcp-diagnostics/mcp/server.py	2026-11-11 12:00:54.753124241 +0000
+@@ -19,6 +19,30 @@
+ DB = {"resourceArn": os.environ["CLUSTER_ARN"], "secretArn": os.environ["DB_SECRET_ARN"], "database": os.environ["DB_NAME"]}
+ DDB_TABLES = [t for t in os.environ.get("DDB_TABLES", "").split(",") if t]
+ IDENT = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")    # schema.table
++MAX_ROWS = 20
++PII_COLUMNS = re.compile(r"(email|phone|full_name|address)", re.I)
++EMAIL = re.compile(r"[^@\s\"]+@[^@\s\"]+\.[a-z]{2,}", re.I)
++
++
++def cap(n):
++    """Diagnostics never need more than a handful of rows."""
++    try:
++        return max(1, min(int(n), MAX_ROWS))
++    except (TypeError, ValueError):
++        return 5
++
++
++def redact(row):
++    """Mask personal data by column name and by value shape."""
++    out = {}
++    for k, v in row.items():
++        if PII_COLUMNS.search(k):
++            out[k] = "[REDACTED]"
++        elif isinstance(v, str) and EMAIL.search(v):
++            out[k] = EMAIL.sub("[REDACTED_EMAIL]", v)
++        else:
++            out[k] = v
++    return out
+ 
+ 
+ def sql(statement, params=None):
+@@ -50,37 +74,35 @@
+ 
+ def sample_rows(args):
+     name = qualified(args["table_name"])
+-    limit = int(args.get("limit", 1000))
+-    return {"table": name, "rows": sql(f"SELECT * FROM {name} LIMIT {limit}")}
+-
+-
+-def run_sql(args):
+-    return sql(str(args["sql"]))
++    limit = cap(args.get("limit", 5))
++    return {"table": name, "rows": [redact(r) for r in sql(f"SELECT * FROM {name} LIMIT {limit}")]}
+ 
+ 
+ def ddb_describe(args):
++    if args["table_name"] not in DDB_TABLES:
++        raise ValueError(f"table must be one of {DDB_TABLES}")
+     t = ddb.describe_table(TableName=args["table_name"])["Table"]
+     return {k: t.get(k) for k in ("TableName", "KeySchema", "AttributeDefinitions", "ItemCount", "TableSizeBytes",
+                                   "BillingModeSummary", "TableStatus")}
+ 
+ 
+ def ddb_sample(args):
+-    items = ddb.scan(TableName=args["table_name"], Limit=int(args.get("limit", 1000)))["Items"]
+-    return {"table": args["table_name"], "items": [{k: list(v.values())[0] for k, v in i.items()} for i in items]}
++    if args["table_name"] not in DDB_TABLES:
++        raise ValueError(f"table must be one of {DDB_TABLES}")
++    items = ddb.scan(TableName=args["table_name"], Limit=cap(args.get("limit", 5)))["Items"]
++    return {"table": args["table_name"], "items": [redact({k: list(v.values())[0] for k, v in i.items()}) for i in items]}
+ 
+ 
+ TOOLS = {
+     "list_tables": (list_tables, "List PostgreSQL tables/views (commerce, reporting, bedrock_kb) and DynamoDB tables.", {}, []),
+     "describe_table": (describe_table, "Show the columns of a PostgreSQL table or view.",
+-                       {"table": {"type": "string", "description": "schema.table, e.g. commerce.orders"}}, ["table"]),
+-    "sample_rows": (sample_rows, "Return sample rows from a PostgreSQL table or view.",
++                       {"table_name": {"type": "string", "description": "schema.table, e.g. commerce.orders"}}, ["table_name"]),
++    "sample_rows": (sample_rows, "Return up to 20 sample rows (personal data redacted) from a PostgreSQL table or view.",
+                     {"table_name": {"type": "string", "description": "schema.table"},
+-                     "limit": {"type": "integer", "description": "number of rows"}}, ["table_name"]),
+-    "run_sql": (run_sql, "Run a SQL statement for troubleshooting.",
+-                {"sql": {"type": "string"}}, ["sql"]),
++                     "limit": {"type": "integer", "description": "number of rows, max 20"}}, ["table_name"]),
+     "ddb_describe": (ddb_describe, "Describe a DynamoDB table (keys, size, item count).",
+                      {"table_name": {"type": "string"}}, ["table_name"]),
+-    "ddb_sample": (ddb_sample, "Return sample items from a DynamoDB table.",
++    "ddb_sample": (ddb_sample, "Return up to 20 sample items (personal data redacted) from a DynamoDB table.",
+                    {"table_name": {"type": "string"}, "limit": {"type": "integer"}}, ["table_name"]),
+ }
+ 
+diff -ruN a/missions/D4-mcp-diagnostics/terraform/main.tf b/missions/D4-mcp-diagnostics/terraform/main.tf
+--- a/missions/D4-mcp-diagnostics/terraform/main.tf	2026-11-11 11:59:49.000000000 +0000
++++ b/missions/D4-mcp-diagnostics/terraform/main.tf	2026-11-11 12:00:54.753305143 +0000
+@@ -45,12 +45,12 @@
+   statement {
+     sid       = "DbCredentials"
+     actions   = ["secretsmanager:GetSecretValue"]
+-    resources = [local.db.admin_secret_arn, local.db.diag_secret_arn]
++    resources = [local.db.diag_secret_arn] # read-only identity only
+   }
+   statement {
+     sid       = "DynamoDB"
+-    actions   = ["dynamodb:*"]
+-    resources = ["*"]
++    actions   = ["dynamodb:DescribeTable", "dynamodb:Scan"] # inspect and sample, nothing else
++    resources = [aws_dynamodb_table.sessions.arn]
+   }
+ }
+ 
+@@ -89,7 +89,7 @@
+ 
+   environment_variables = {
+     CLUSTER_ARN   = local.db.cluster_arn
+-    DB_SECRET_ARN = local.db.admin_secret_arn
++    DB_SECRET_ARN = local.db.diag_secret_arn
+     DB_NAME       = local.db.database
+     DDB_TABLES    = aws_dynamodb_table.sessions.name
+   }

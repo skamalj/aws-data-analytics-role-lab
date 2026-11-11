@@ -149,3 +149,59 @@ def serve(handler, port=8080):
 
     print(f"Trail Desk (LangGraph) listening on :{port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
+
+
+# ----------------------------------------------------------------- reusable tool sources
+def gateway_tools(gateway_url, inject=None):
+    """Tools published by an AgentCore Gateway (MCP, AWS_IAM authorizer, SigV4-signed).
+
+    inject: optional callable(args, ctx) -> args, applied by the APPLICATION before every call,
+    e.g. to set the authenticated customer id. The model never sees or controls injected values.
+    """
+    import urllib.request
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    session = boto3.Session(region_name=REGION)
+
+    def mcp(method, params=None):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+        req = AWSRequest(method="POST", url=gateway_url, data=body,
+                         headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+        SigV4Auth(session.get_credentials().get_frozen_credentials(), "bedrock-agentcore", REGION).add_auth(req)
+        r = urllib.request.Request(gateway_url, data=body, method="POST", headers=dict(req.headers.items()))
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            text = resp.read().decode()
+        msg = json.loads(text) if text.lstrip().startswith("{") else \
+            json.loads([l[5:] for l in text.splitlines() if l.startswith("data:")][-1])
+        if "error" in msg:
+            raise RuntimeError(f"MCP {method}: {msg['error']}")
+        return msg["result"]
+
+    tools = []
+    for t in mcp("tools/list").get("tools", []):
+        def call(args, ctx, name=t["name"]):
+            if inject:
+                args = inject(dict(args), ctx)
+            res = mcp("tools/call", {"name": name, "arguments": args})
+            text = "\n".join(c.get("text", "") for c in res.get("content", []))
+            if res.get("isError"):
+                raise RuntimeError(text)
+            return text
+        schema = t.get("inputSchema") or {"type": "object", "properties": {}}
+        tools.append(Tool(t["name"], t.get("description") or t["name"], schema.get("properties", {}),
+                          schema.get("required", []), call))
+    return tools
+
+
+def knowledge_base_tool(kb_id, name, description):
+    """A Retrieve-based search tool over a Bedrock Knowledge Base."""
+    kb = boto3.client("bedrock-agent-runtime", region_name=REGION, config=CFG)
+
+    def search(args, ctx):
+        out = kb.retrieve(knowledgeBaseId=kb_id, retrievalQuery={"text": args["query"]},
+                          retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": 4}})
+        hits = [{"text": r["content"]["text"], "source": r.get("location", {}).get("s3Location", {}).get("uri")}
+                for r in out["retrievalResults"]]
+        return json.dumps(hits) if hits else "No matching passages found."
+
+    return Tool(name, description, {"query": {"type": "string", "description": "what to look up"}}, ["query"], search)
