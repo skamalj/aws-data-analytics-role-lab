@@ -1,0 +1,58 @@
+diff -ruN a/missions/D1-structured-data/db/grants.sql b/missions/D1-structured-data/db/grants.sql
+--- a/missions/D1-structured-data/db/grants.sql	2026-11-11 11:55:03.000000000 +0000
++++ b/missions/D1-structured-data/db/grants.sql	2026-11-11 11:56:14.045856643 +0000
+@@ -3,4 +3,9 @@
+ REVOKE ALL ON ALL TABLES IN SCHEMA commerce FROM trail_desk_app;
+ REVOKE ALL ON ALL TABLES IN SCHEMA reporting FROM trail_desk_app;
+ 
+-GRANT USAGE ON SCHEMA commerce TO trail_desk_app;
++REVOKE USAGE ON SCHEMA commerce FROM trail_desk_app;
++
++-- The agent reads curated views only. Views run with their owner's rights, so no access to the
++-- underlying commerce tables (and their PII columns) is needed.
++GRANT USAGE ON SCHEMA reporting TO trail_desk_app;
++GRANT SELECT ON reporting.order_summary, reporting.category_activity TO trail_desk_app;
+diff -ruN a/missions/D1-structured-data/lambdas/order_tools.py b/missions/D1-structured-data/lambdas/order_tools.py
+--- a/missions/D1-structured-data/lambdas/order_tools.py	2026-11-11 11:55:03.000000000 +0000
++++ b/missions/D1-structured-data/lambdas/order_tools.py	2026-11-11 11:56:14.046187266 +0000
+@@ -6,6 +6,7 @@
+ """
+ import json
+ import os
++import re
+ 
+ import boto3
+ 
+@@ -26,10 +27,18 @@
+     return rows[0] if rows else {"error": "order not found"}
+ 
+ 
++CUSTOMER_ID = re.compile(r"^C\d{5}$")
++MAX_ROWS = 20
++
++
+ def orders_for_customer(args):
+-    cid = args.get("customer_id", "")
++    cid = str(args.get("customer_id", ""))
++    if not CUSTOMER_ID.fullmatch(cid):           # validate before touching the database
++        return {"error": "customer_id must look like C00112"}
+     rows = query("SELECT order_id, order_date, status, total, items FROM reporting.order_summary "
+-                 f"WHERE customer_id = '{cid}' ORDER BY order_date DESC")
++                 "WHERE customer_id = :cid ORDER BY order_date DESC LIMIT :lim",   # bound parameters, bounded result
++                 [{"name": "cid", "value": {"stringValue": cid}},
++                  {"name": "lim", "value": {"longValue": MAX_ROWS}}])
+     return {"customer_id": cid, "orders": rows}
+ 
+ 
+diff -ruN a/missions/D1-structured-data/terraform/main.tf b/missions/D1-structured-data/terraform/main.tf
+--- a/missions/D1-structured-data/terraform/main.tf	2026-11-11 11:55:34.000000000 +0000
++++ b/missions/D1-structured-data/terraform/main.tf	2026-11-11 11:56:14.045466997 +0000
+@@ -71,7 +71,7 @@
+   environment {
+     variables = {
+       CLUSTER_ARN   = local.db.cluster_arn
+-      DB_SECRET_ARN = local.db.admin_secret_arn
++      DB_SECRET_ARN = local.db.app_secret_arn # least-privilege app identity, never the admin
+       DB_NAME       = local.db.database
+     }
+   }

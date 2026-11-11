@@ -1,0 +1,9 @@
+output "region" { value = var.region }
+output "account_id" { value = data.aws_caller_identity.me.account_id }
+output "cluster_arn" { value = aws_rds_cluster.shop.arn }
+output "cluster_id" { value = aws_rds_cluster.shop.cluster_identifier }
+output "database" { value = aws_rds_cluster.shop.database_name }
+output "admin_secret_arn" { value = aws_rds_cluster.shop.master_user_secret[0].secret_arn }
+output "app_secret_arn" { value = aws_secretsmanager_secret.db["app"].arn }
+output "kb_secret_arn" { value = aws_secretsmanager_secret.db["kb"].arn }
+output "diag_secret_arn" { value = aws_secretsmanager_secret.db["diag"].arn }

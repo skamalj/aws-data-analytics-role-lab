@@ -1,0 +1,36 @@
+diff -ruN a/missions/D2-semantic-retrieval-pgvector/db/kb_schema.sql b/missions/D2-semantic-retrieval-pgvector/db/kb_schema.sql
+--- a/missions/D2-semantic-retrieval-pgvector/db/kb_schema.sql	2026-11-11 11:57:36.000000000 +0000
++++ b/missions/D2-semantic-retrieval-pgvector/db/kb_schema.sql	2026-11-11 11:58:21.121715925 +0000
+@@ -6,14 +6,14 @@
+ 
+ CREATE TABLE bedrock_kb.manual_chunks (
+   id               uuid PRIMARY KEY,
+-  embedding        vector(1536),
+-  chunk_text       text,
++  embedding        vector(1024),     -- must equal the embedding model dimensions (Titan Text Embeddings V2: 1024)
++  chunks           text,             -- the KB writes chunk text to the column named in field_mapping.text_field
+   metadata         json,
+   custom_metadata  jsonb
+ );
+ 
+ CREATE INDEX manual_chunks_embedding_idx ON bedrock_kb.manual_chunks USING hnsw (embedding vector_cosine_ops);
+-CREATE INDEX manual_chunks_text_idx ON bedrock_kb.manual_chunks USING gin (to_tsvector('simple', chunk_text));
++CREATE INDEX manual_chunks_text_idx ON bedrock_kb.manual_chunks USING gin (to_tsvector('simple', chunks));
+ CREATE INDEX manual_chunks_custom_metadata_idx ON bedrock_kb.manual_chunks USING gin (custom_metadata);
+ 
+ GRANT USAGE ON SCHEMA bedrock_kb TO bedrock_kb_user;
+diff -ruN a/missions/D2-semantic-retrieval-pgvector/terraform/main.tf b/missions/D2-semantic-retrieval-pgvector/terraform/main.tf
+--- a/missions/D2-semantic-retrieval-pgvector/terraform/main.tf	2026-11-11 11:57:36.000000000 +0000
++++ b/missions/D2-semantic-retrieval-pgvector/terraform/main.tf	2026-11-11 11:58:21.121822196 +0000
+@@ -74,6 +74,11 @@
+     resources = [local.db.cluster_arn]
+   }
+   statement {
++    sid       = "DbCredentials" # the KB logs in to PostgreSQL as bedrock_kb_user via this secret
++    actions   = ["secretsmanager:GetSecretValue"]
++    resources = [local.db.kb_secret_arn]
++  }
++  statement {
+     sid       = "DataApi"
+     actions   = ["rds-data:ExecuteStatement", "rds-data:BatchExecuteStatement"]
+     resources = [local.db.cluster_arn]

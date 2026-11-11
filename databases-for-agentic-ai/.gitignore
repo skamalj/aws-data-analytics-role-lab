@@ -1,0 +1,9 @@
+**/build/
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+.session-*
+__pycache__/
+.rds-resume
