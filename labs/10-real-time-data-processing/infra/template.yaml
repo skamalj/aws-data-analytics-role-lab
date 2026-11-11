@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 10 Real-Time Data Processing. Starting environment:
+  a Kinesis stream fed every second with freezer telemetry by a scheduled producer Lambda
+  (with periodic "door left open" incidents and occasional malformed records), an
+  Amazon OpenSearch Service domain with fine-grained access control, an SQS queue for
+  failed records, and an execution role for the processor Lambda you will write.
+  COST: OpenSearch t3.small.search ~ $0.04/h; producer Lambda + 1 shard ~ $0.02/h.
+
+Parameters:
+  ProducerEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set to false to pause the telemetry producer (and its cost)
+  OpenSearchInstanceType:
+    Type: String
+    Default: t3.small.search
+
+Conditions:
+  ProducerOn: !Equals [!Ref ProducerEnabled, "true"]
+
+Resources:
+  TelemetryStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: riverbend-freezer-telemetry
+      StreamModeDetails: { StreamMode: PROVISIONED }
+      ShardCount: 1
+      RetentionPeriodHours: 24
+
+  # ---------- producer ----------
+  ProducerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: put
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:PutRecords]
+                Resource: !GetAtt TelemetryStream.Arn
+
+  ProducerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-telemetry-producer"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      MemorySize: 128
+      Role: !GetAtt ProducerRole.Arn
+      Environment:
+        Variables: { STREAM_NAME: !Ref TelemetryStream }
+      Code:
+        ZipFile: |
+          # Emits one reading per freezer per second for ~55 s (it is invoked every minute).
+          # Every 10 minutes one freezer (in rotation) has its door left open for 3 minutes.
+          # Every 5 minutes (first second of the invocation) one malformed record is sent.
+          import json, os, random, time
+          from datetime import datetime, timezone
+          import boto3
+          k = boto3.client("kinesis")
+          DEVICES = [f"freezer-{i:02d}" for i in range(1, 11)]
+
+          def reading(dev, now):
+              m = now.minute % 10
+              incident_dev = DEVICES[(now.hour * 6 + now.minute // 10) % 10]
+              base = -18.0
+              door = False
+              if dev == incident_dev and m < 3:
+                  base, door = -14.0 + 4 * m, True          # -14, -10, -6 C over three minutes
+              return {"device_id": dev, "warehouse": f"WH-{int(dev[-2:]) % 3 + 1}",
+                      "reading_ts": now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                      "temperature_c": round(random.gauss(base, 0.5), 2),
+                      "humidity_pct": round(random.uniform(30, 60), 1), "door_open": door}
+
+          def handler(event, context):
+              sent = 0
+              while context.get_remaining_time_in_millis() > 4000:
+                  t0 = time.time()
+                  now = datetime.now(timezone.utc)
+                  recs = [{"Data": json.dumps(reading(d, now)).encode(), "PartitionKey": d} for d in DEVICES]
+                  if now.minute % 5 == 0 and sent == 0:
+                      recs.append({"Data": b"freezer-03;-17.9;THIS IS NOT JSON", "PartitionKey": "freezer-03"})
+                  k.put_records(StreamName=os.environ["STREAM_NAME"], Records=recs)
+                  sent += len(recs)
+                  time.sleep(max(0, 1 - (time.time() - t0)))
+              return {"sent": sent}
+
+  ProducerSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: !If [ProducerOn, ENABLED, DISABLED]
+      Targets:
+        - { Id: producer, Arn: !GetAtt ProducerFunction.Arn }
+
+  ProducerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProducerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ProducerSchedule.Arn
+
+  # ---------- OpenSearch ----------
+  OpenSearchMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-opensearch-admin"
+      Description: Master user for the lab OpenSearch domain (Dashboards login)
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: password
+        PasswordLength: 20
+        RequireEachIncludedType: true
+        ExcludeCharacters: "\"'@/\\`$&;:{}[]<>|"
+
+  OpsDomain:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: !Sub "${AWS::StackName}-ops"
+      EngineVersion: OpenSearch_2.17
+      ClusterConfig:
+        InstanceType: !Ref OpenSearchInstanceType
+        InstanceCount: 1
+        ZoneAwarenessEnabled: false
+      EBSOptions: { EBSEnabled: true, VolumeType: gp3, VolumeSize: 10 }
+      EncryptionAtRestOptions: { Enabled: true }
+      NodeToNodeEncryptionOptions: { Enabled: true }
+      DomainEndpointOptions: { EnforceHTTPS: true, TLSSecurityPolicy: Policy-Min-TLS-1-2-2019-07 }
+      AdvancedSecurityOptions:
+        Enabled: true
+        InternalUserDatabaseEnabled: true
+        MasterUserOptions:
+          MasterUserName: !Sub "{{resolve:secretsmanager:${OpenSearchMasterSecret}:SecretString:username}}"
+          MasterUserPassword: !Sub "{{resolve:secretsmanager:${OpenSearchMasterSecret}:SecretString:password}}"
+      # Fine-grained access control does the authorisation; the resource policy lets requests reach it.
+      AccessPolicies:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: "*" }
+            Action: es:ESHttp*
+            Resource: !Sub "arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${AWS::StackName}-ops/*"
+
+  # ---------- for the processor you build ----------
+  FailedRecordsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-failed-records"
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+
+  ProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-processor-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: process
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:GetRecords, kinesis:GetShardIterator, kinesis:DescribeStream,
+                         kinesis:DescribeStreamSummary, kinesis:ListShards, kinesis:ListStreams,
+                         kinesis:SubscribeToShard]
+                Resource: !GetAtt TelemetryStream.Arn
+              - Effect: Allow
+                Action: [sqs:SendMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt FailedRecordsQueue.Arn
+              - Effect: Allow
+                Action: [es:ESHttpPost, es:ESHttpPut, es:ESHttpGet]
+                Resource: !Sub "${OpsDomain.Arn}/*"
+
+Outputs:
+  StreamName: { Value: !Ref TelemetryStream }
+  StreamArn: { Value: !GetAtt TelemetryStream.Arn }
+  OpenSearchEndpoint: { Value: !GetAtt OpsDomain.DomainEndpoint }
+  OpenSearchDashboardsUrl: { Value: !Sub "https://${OpsDomain.DomainEndpoint}/_dashboards" }
+  OpenSearchSecretArn: { Value: !Ref OpenSearchMasterSecret }
+  FailedRecordsQueueUrl: { Value: !Ref FailedRecordsQueue }
+  FailedRecordsQueueArn: { Value: !GetAtt FailedRecordsQueue.Arn }
+  ProcessorRoleArn: { Value: !GetAtt ProcessorRole.Arn }
