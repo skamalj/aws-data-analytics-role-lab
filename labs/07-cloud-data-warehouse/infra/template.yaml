@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 07 Cloud Data Warehouse. Starting environment:
+  an Amazon Redshift Serverless namespace and workgroup (admin password managed in
+  Secrets Manager), an IAM role Redshift uses for COPY and Spectrum, a staging bucket
+  with a year of sales data, and a Glue table over the 2023 archive.
+  COST: Redshift Serverless bills RPU-hours only while queries run (8 RPU base, 60 s minimum).
+
+Parameters:
+  BaseCapacity:
+    Type: Number
+    Default: 8
+    AllowedValues: [8, 16, 32]
+    Description: Base RPUs for the workgroup (8 is the minimum and cheapest)
+
+Resources:
+  StagingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-staging-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  RedshiftRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-redshift-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [redshift.amazonaws.com, redshift-serverless.amazonaws.com] }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: copy-and-spectrum
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket, s3:GetBucketLocation]
+                Resource:
+                  - !GetAtt StagingBucket.Arn
+                  - !Sub "${StagingBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:BatchGetPartition
+                  - glue:CreateDatabase
+                Resource: "*"
+
+  Namespace:
+    Type: AWS::RedshiftServerless::Namespace
+    Properties:
+      NamespaceName: !Ref AWS::StackName
+      DbName: riverbend
+      AdminUsername: awsadmin
+      ManageAdminPassword: true
+      DefaultIamRoleArn: !GetAtt RedshiftRole.Arn
+      IamRoles: [!GetAtt RedshiftRole.Arn]
+
+  Workgroup:
+    Type: AWS::RedshiftServerless::Workgroup
+    Properties:
+      WorkgroupName: !Ref AWS::StackName
+      NamespaceName: !Ref Namespace
+      BaseCapacity: !Ref BaseCapacity
+      PubliclyAccessible: false
+
+  ArchiveDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: riverbend_archive
+        Description: Historical orders kept in S3, queried from Redshift via Spectrum
+
+  ArchiveOrdersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref ArchiveDatabase
+      TableInput:
+        Name: orders_2023
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${StagingBucket}/archive/orders_2023/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: order_ts, Type: timestamp }
+            - { Name: customer_id, Type: string }
+            - { Name: product_id, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: unit_price, Type: double }
+            - { Name: discount, Type: double }
+            - { Name: total_amount, Type: double }
+            - { Name: channel, Type: string }
+            - { Name: store_id, Type: string }
+            - { Name: region, Type: string }
+            - { Name: status, Type: string }
+
+Outputs:
+  StagingBucket: { Value: !Ref StagingBucket }
+  RedshiftRoleArn: { Value: !GetAtt RedshiftRole.Arn }
+  WorkgroupName: { Value: !Ref Workgroup }
+  NamespaceName: { Value: !Ref Namespace }
+  Database: { Value: riverbend }
