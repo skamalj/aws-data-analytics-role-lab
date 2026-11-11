@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lab 08 reference solution: Glue JDBC connection + extract job, lake tables,
+  a Step Functions (JSONata) state machine and a daily EventBridge Scheduler schedule.
+
+Parameters:
+  LabStack: { Type: String, Default: cq-da-08 }
+  ClusterEndpoint: { Type: String }
+  DbSecretArn: { Type: String }
+  SubnetId: { Type: String }
+  SubnetAZ: { Type: String }
+  GlueSecurityGroupId: { Type: String }
+  ExtractBucket: { Type: String }
+  ScriptsBucket: { Type: String }
+  GlueJobRoleArn: { Type: String }
+  StepFunctionsRoleArn: { Type: String }
+  NotificationsTopicArn: { Type: String }
+
+Resources:
+  AuroraConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: !Sub "${LabStack}-aurora"
+        ConnectionType: JDBC
+        ConnectionProperties:
+          JDBC_CONNECTION_URL: !Sub "jdbc:postgresql://${ClusterEndpoint}:5432/riverbend"
+          SECRET_ID: !Ref DbSecretArn
+          JDBC_ENFORCE_SSL: "false"
+        PhysicalConnectionRequirements:
+          SubnetId: !Ref SubnetId
+          AvailabilityZone: !Ref SubnetAZ
+          SecurityGroupIdList: [!Ref GlueSecurityGroupId]
+
+  ExtractJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${LabStack}-daily-extract"
+      Role: !Ref GlueJobRoleArn
+      GlueVersion: "5.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      MaxRetries: 1
+      Connections:
+        Connections: [!Ref AuroraConnection]     # places the job's ENIs in the private subnet
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${ScriptsBucket}/glue/extract_orders.py"
+      DefaultArguments:
+        --db_host: !Ref ClusterEndpoint
+        --db_name: riverbend
+        --secret_arn: !Ref DbSecretArn
+        --extract_bucket: !Ref ExtractBucket
+        --mode: incremental
+        --run_date: "2024-07-01"
+        --job-bookmark-option: job-bookmark-disable
+
+  OrdersChangesTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: riverbend_extracts
+      TableInput:
+        Name: orders_changes
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.extract_date.type: date
+          projection.extract_date.format: yyyy-MM-dd
+          projection.extract_date.range: "2024-01-01,NOW"
+          projection.extract_date.interval: "1"
+          projection.extract_date.interval.unit: DAYS
+          storage.location.template: !Sub "s3://${ExtractBucket}/orders_changes/extract_date=${!extract_date}/"
+        PartitionKeys:
+          - { Name: extract_date, Type: date }
+        StorageDescriptor:
+          Location: !Sub "s3://${ExtractBucket}/orders_changes/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: order_ts, Type: timestamp }
+            - { Name: customer_id, Type: string }
+            - { Name: product_id, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: unit_price, Type: "decimal(10,2)" }
+            - { Name: discount, Type: "decimal(4,2)" }
+            - { Name: total_amount, Type: "decimal(12,2)" }
+            - { Name: channel, Type: string }
+            - { Name: store_id, Type: string }
+            - { Name: region, Type: string }
+            - { Name: status, Type: string }
+            - { Name: updated_at, Type: timestamp }
+            - { Name: extracted_at, Type: timestamp }
+
+  DailyBatch:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${LabStack}-daily-batch"
+      RoleArn: !Ref StepFunctionsRoleArn
+      DefinitionSubstitutions:
+        JobName: !Ref ExtractJob
+        WorkGroup: !Ref LabStack
+        Topic: !Ref NotificationsTopicArn
+      Definition:
+        Comment: Daily extraction of changed orders from Aurora into the lake
+        QueryLanguage: JSONata
+        StartAt: ResolveParameters
+        States:
+          ResolveParameters:
+            Type: Pass
+            Comment: Default run_date = yesterday (UTC), default mode = incremental
+            Assign:
+              run_date: >-
+                {% $exists($states.input.run_date) ? $states.input.run_date :
+                   $fromMillis($toMillis($now()) - 86400000, '[Y0001]-[M01]-[D01]') %}
+              mode: "{% $exists($states.input.mode) ? $states.input.mode : 'incremental' %}"
+            Next: Extract
+          Extract:
+            Type: Task
+            Resource: arn:aws:states:::glue:startJobRun.sync
+            Arguments:
+              JobName: "${JobName}"
+              Arguments:
+                --run_date: "{% $run_date %}"
+                --mode: "{% $mode %}"
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Assign: { error: "{% $states.errorOutput %}" }
+                Next: NotifyFailure
+            Next: CountRows
+          CountRows:
+            Type: Task
+            Resource: arn:aws:states:::athena:startQueryExecution.sync
+            Arguments:
+              WorkGroup: "${WorkGroup}"
+              QueryString: >-
+                {% "SELECT COUNT(*) FROM riverbend_extracts.orders_changes WHERE extract_date = DATE '" & $run_date & "'" %}
+            Assign: { qid: "{% $states.result.QueryExecution.QueryExecutionId %}" }
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Assign: { error: "{% $states.errorOutput %}" }
+                Next: NotifyFailure
+            Next: GetCount
+          GetCount:
+            Type: Task
+            Resource: arn:aws:states:::athena:getQueryResults
+            Arguments: { QueryExecutionId: "{% $qid %}" }
+            Assign: { rows: "{% $states.result.ResultSet.Rows[1].Data[0].VarCharValue %}" }
+            Next: NotifySuccess
+          NotifySuccess:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Arguments:
+              TopicArn: "${Topic}"
+              Subject: Riverbend daily extract succeeded
+              Message: "{% 'Mode ' & $mode & ' extract for ' & $run_date & ' wrote ' & $rows & ' rows.' %}"
+            Output: "{% {'run_date': $run_date, 'mode': $mode, 'rows': $number($rows)} %}"
+            End: true
+          NotifyFailure:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Arguments:
+              TopicArn: "${Topic}"
+              Subject: Riverbend daily extract FAILED
+              Message: "{% 'Extract for ' & $run_date & ' failed: ' & $string($error) %}"
+            Next: Failed
+          Failed:
+            Type: Fail
+
+  DailySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${LabStack}-daily-0130-utc"
+      ScheduleExpression: cron(30 1 * * ? *)
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow: { Mode: "OFF" }
+      State: DISABLED          # enable it once you've tested manually; the sample data is in 2024
+      Target:
+        Arn: !Ref DailyBatch
+        RoleArn: !Ref StepFunctionsRoleArn
+        Input: "{}"
+
+Outputs:
+  StateMachineArn: { Value: !Ref DailyBatch }
+  GlueJobName: { Value: !Ref ExtractJob }
+  GlueConnectionName: { Value: !Ref AuroraConnection }

@@ -19,7 +19,7 @@ CREATE EXTERNAL SCHEMA IF NOT EXISTS archive
 FROM DATA CATALOG DATABASE 'riverbend_archive'
 IAM_ROLE default;
 
-SELECT COUNT(*) AS archive_rows, SUM(total_amount) FILTER (WHERE status = 'COMPLETED') AS revenue_2023
+SELECT COUNT(*) AS archive_rows, SUM(CASE WHEN status = 'COMPLETED' THEN total_amount END) AS revenue_2023
 FROM archive.orders_2023;
 
 -- 5.1 Lifetime (2023 + 2024) top 5 customers

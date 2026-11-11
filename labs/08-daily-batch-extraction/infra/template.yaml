@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 08 Daily Batch Extraction. Starting environment:
+  a private VPC (no internet access) with an Aurora PostgreSQL Serverless v2 order
+  database (Data API enabled, password in Secrets Manager), VPC endpoints that
+  AWS Glue needs, a self-referencing security group for Glue, buckets, IAM roles
+  for Glue and Step Functions, and an SNS topic.
+  COST: Aurora Serverless v2 at 0.5 ACU minimum plus 2 interface endpoints x 2 AZs is roughly $2-3/day.
+
+Resources:
+  # ---------------- Network ----------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.80.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Ref AWS::StackName }]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.80.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private-a" }]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.80.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private-b" }]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  SubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable }
+
+  SubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable }
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS from inside the VPC to interface endpoints
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 10.80.0.0/16 }
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  GlueEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.glue"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  GlueSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Attached to Glue job ENIs. Glue requires a self-referencing rule.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0 }
+
+  GlueSelfReference:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref GlueSecurityGroup
+      SourceSecurityGroupId: !Ref GlueSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL from Glue only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref GlueSecurityGroup }
+
+  # ---------------- Source database ----------------
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for the order database
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  OrdersCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Sub "${AWS::StackName}-orders"
+      Engine: aurora-postgresql
+      DatabaseName: riverbend
+      MasterUsername: dbadmin
+      ManageMasterUserPassword: true
+      EnableHttpEndpoint: true          # RDS Data API: seeding and the RDS query editor
+      ServerlessV2ScalingConfiguration: { MinCapacity: 0.5, MaxCapacity: 2 }
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VpcSecurityGroupIds: [!Ref DatabaseSecurityGroup]
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      StorageEncrypted: true
+
+  OrdersInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref OrdersCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+
+  # ---------------- Lake side ----------------
+  ExtractBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-extracts-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ScriptsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-scripts-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-athena-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AWS::StackName
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucket}/results/"
+
+  ExtractDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: riverbend_extracts
+        Description: Daily extracts from the operational order database
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-glue-job-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: glue.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: extract-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket]
+                Resource:
+                  - !GetAtt ExtractBucket.Arn
+                  - !Sub "${ExtractBucket.Arn}/*"
+                  - !GetAtt ScriptsBucket.Arn
+                  - !Sub "${ScriptsBucket.Arn}/*"
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+                Resource: !GetAtt OrdersCluster.MasterUserSecret.SecretArn
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-sfn-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [states.amazonaws.com, scheduler.amazonaws.com] }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: orchestrate
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [glue:StartJobRun, glue:GetJobRun, glue:GetJobRuns, glue:BatchStopJobRun,
+                         glue:GetTable, glue:GetDatabase, glue:GetPartitions]
+                Resource: "*"
+              - Effect: Allow
+                Action: [athena:StartQueryExecution, athena:GetQueryExecution, athena:GetQueryResults,
+                         athena:StopQueryExecution, athena:GetWorkGroup]
+                Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroup}"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+                Resource:
+                  - !GetAtt AthenaResultsBucket.Arn
+                  - !Sub "${AthenaResultsBucket.Arn}/*"
+                  - !GetAtt ExtractBucket.Arn
+                  - !Sub "${ExtractBucket.Arn}/*"
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref NotificationsTopic
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-*"
+              - Effect: Allow
+                Action: [events:PutTargets, events:PutRule, events:DescribeRule]
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctions*"
+
+  NotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-batch-notifications"
+
+Outputs:
+  ClusterArn: { Value: !GetAtt OrdersCluster.DBClusterArn }
+  ClusterEndpoint: { Value: !GetAtt OrdersCluster.Endpoint.Address }
+  DbSecretArn: { Value: !GetAtt OrdersCluster.MasterUserSecret.SecretArn }
+  Database: { Value: riverbend }
+  VpcId: { Value: !Ref Vpc }
+  PrivateSubnetA: { Value: !Ref PrivateSubnetA }
+  PrivateSubnetAZ: { Value: !GetAtt PrivateSubnetA.AvailabilityZone }
+  GlueSecurityGroupId: { Value: !Ref GlueSecurityGroup }
+  ExtractBucket: { Value: !Ref ExtractBucket }
+  ScriptsBucket: { Value: !Ref ScriptsBucket }
+  AthenaWorkGroup: { Value: !Ref AthenaWorkGroup }
+  GlueDatabase: { Value: !Ref ExtractDatabase }
+  GlueJobRoleArn: { Value: !GetAtt GlueJobRole.Arn }
+  StepFunctionsRoleArn: { Value: !GetAtt StepFunctionsRole.Arn }
+  NotificationsTopicArn: { Value: !Ref NotificationsTopic }
