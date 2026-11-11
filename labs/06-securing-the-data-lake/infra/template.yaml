@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Cloud Quest Data Analytics - Lab 06 Securing the Data Lake. Starting environment:
+  a data lake bucket with customer PII and orders, Glue tables over it (still using
+  IAM-only access control), and two persona roles (EU analyst, marketing) to test as.
+
+Resources:
+  LakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-lake-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-athena-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire, Status: Enabled, ExpirationInDays: 7 }
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AWS::StackName
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        EngineVersion:
+          SelectedEngineVersion: Athena engine version 3
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucket}/results/"
+
+  SecureDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: riverbend_secure
+        Description: Customer and order data that must be protected with Lake Formation
+
+  CustomersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref SecureDatabase
+      TableInput:
+        Name: customers
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${LakeBucket}/customers/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: customer_id, Type: string }
+            - { Name: first_name, Type: string }
+            - { Name: last_name, Type: string }
+            - { Name: email, Type: string, Comment: PII }
+            - { Name: phone, Type: string, Comment: PII }
+            - { Name: city, Type: string }
+            - { Name: country, Type: string }
+            - { Name: region, Type: string }
+            - { Name: signup_date, Type: date }
+            - { Name: loyalty_tier, Type: string }
+
+  OrdersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref SecureDatabase
+      TableInput:
+        Name: orders
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: csv, skip.header.line.count: "1" }
+        StorageDescriptor:
+          Location: !Sub "s3://${LakeBucket}/orders/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+            Parameters: { field.delim: "," }
+          Columns:
+            - { Name: order_id, Type: string }
+            - { Name: order_ts, Type: timestamp }
+            - { Name: customer_id, Type: string }
+            - { Name: product_id, Type: string }
+            - { Name: quantity, Type: int }
+            - { Name: unit_price, Type: double }
+            - { Name: discount, Type: double }
+            - { Name: total_amount, Type: double }
+            - { Name: channel, Type: string }
+            - { Name: store_id, Type: string }
+            - { Name: region, Type: string }
+            - { Name: status, Type: string }
+
+  # Persona roles. Both trust the account, so any admin in it can assume them for testing.
+  # They have Athena/Glue API access but NO S3 access to the lake bucket: once the
+  # location is registered, data access must come from Lake Formation grants.
+  PersonaPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-persona-query-access"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:GetQueryExecution
+              - athena:GetQueryResults
+              - athena:StopQueryExecution
+              - athena:GetWorkGroup
+            Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroup}"
+          - Effect: Allow
+            Action:
+              - glue:GetDatabase
+              - glue:GetDatabases
+              - glue:GetTable
+              - glue:GetTables
+              - glue:GetPartition
+              - glue:GetPartitions
+              - lakeformation:GetDataAccess
+            Resource: "*"
+          - Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+            Resource:
+              - !GetAtt AthenaResultsBucket.Arn
+              - !Sub "${AthenaResultsBucket.Arn}/*"
+
+  EuAnalystRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-eu-analyst"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root" }
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [!Ref PersonaPolicy]
+
+  MarketingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-marketing"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root" }
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [!Ref PersonaPolicy]
+
+Outputs:
+  LakeBucket: { Value: !Ref LakeBucket }
+  AthenaWorkGroup: { Value: !Ref AthenaWorkGroup }
+  GlueDatabase: { Value: !Ref SecureDatabase }
+  EuAnalystRoleArn: { Value: !GetAtt EuAnalystRole.Arn }
+  MarketingRoleArn: { Value: !GetAtt MarketingRole.Arn }
