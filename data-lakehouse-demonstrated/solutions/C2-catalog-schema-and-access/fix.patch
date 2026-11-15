@@ -1,0 +1,16 @@
+diff -ruN a/missions/C2-catalog-schema-and-access/sql/maintenance.sql b/missions/C2-catalog-schema-and-access/sql/maintenance.sql
+--- a/missions/C2-catalog-schema-and-access/sql/maintenance.sql	2026-11-15 06:31:44.000000000 +0000
++++ b/missions/C2-catalog-schema-and-access/sql/maintenance.sql	2026-11-15 06:34:50.728111492 +0000
+@@ -1,3 +1,9 @@
+--- Spark SQL run by the maintenance job (scenarios/run_maintenance.py uploads this file and runs it).
+--- Tables: glue_catalog.riverbend_lakehouse.<table>
+-SELECT count(*) FROM glue_catalog.riverbend_lakehouse.products;
++-- 1. schema evolution for supplier feed v2 (metadata-only changes)
++ALTER TABLE glue_catalog.riverbend_lakehouse.products ADD COLUMN brand string;
++ALTER TABLE glue_catalog.riverbend_lakehouse.products ALTER COLUMN price TYPE double;
++ALTER TABLE glue_catalog.riverbend_lakehouse.products ALTER COLUMN stock TYPE bigint;
++-- 2. partition evolution to match how the table is queried (by category)
++ALTER TABLE glue_catalog.riverbend_lakehouse.products ADD PARTITION FIELD category;
++ALTER TABLE glue_catalog.riverbend_lakehouse.products DROP PARTITION FIELD bucket(16, product_id);
++-- 3. rewrite existing files into the new layout
++CALL glue_catalog.system.rewrite_data_files(table => 'riverbend_lakehouse.products', options => map('rewrite-all', 'true'));

@@ -57,3 +57,16 @@ def expected_orders():
             if cur is None or o["updated_at"] > cur["updated_at"]:
                 latest[o["order_id"]] = o
     return latest
+
+
+def supplier_feed_v2():
+    """Supplier feed v2: a new `brand` attribute and prices with cents (C2)."""
+    r = random.Random(202)
+    brands = ["Kestrel", "Northpine", "Talus", "Cairn", "Ember", "Glacier"]
+    cats = ["Tents", "Footwear", "Apparel", "Packs", "Cooking", "Climbing"]
+    rows = []
+    for n in list(range(1, 60001, 60)) + list(range(60001, 61001)):      # 1,000 updates + 1,000 new SKUs
+        rows.append({"product_id": f"SKU{n:06d}", "product_name": f"Supplier item {n}",
+                     "category": cats[(n // 6) % 6], "price": round(19 + n % 480 + r.choice([0.49, 0.95, 0.99]), 2),
+                     "stock": n % 250, "brand": r.choice(brands)})
+    return rows
