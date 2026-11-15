@@ -54,8 +54,13 @@ class Db:
     def run(self, sql, params=None, retries=12):
         for i in range(retries):
             try:
-                return self.c.execute_statement(sql=sql, includeResultMetadata=True,
+                return self.c.execute_statement(sql=sql, includeResultMetadata=True, continueAfterTimeout=True,
                                                 parameters=params or [], **self.kw)
+            except self.c.exceptions.StatementTimeoutException:
+                # Long DDL (e.g. building an HNSW index): the Data API stops waiting after ~45 s,
+                # but with continueAfterTimeout the statement keeps running in the database.
+                print("  (statement still running in the database after 45 s - continuing)", flush=True)
+                return {}
             except self.c.exceptions.DatabaseResumingException:
                 print("  (database is resuming from auto-pause, waiting 10 s)", flush=True)
                 time.sleep(10)

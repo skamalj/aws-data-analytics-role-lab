@@ -1,0 +1,68 @@
+diff -ruN a/missions/D8-product-search-optimization/db/indexes.sql b/missions/D8-product-search-optimization/db/indexes.sql
+--- a/missions/D8-product-search-optimization/db/indexes.sql	2026-11-15 05:25:28.000000000 +0000
++++ b/missions/D8-product-search-optimization/db/indexes.sql	2026-11-15 05:29:36.871713686 +0000
+@@ -1,3 +1,15 @@
+--- Indexes for the product search tools (applied by setup.py after catalog.sql).
+--- The catalog launched without any secondary indexes.
+-SELECT 1;
++-- Indexes for the product search tools (applied by setup.py after catalog.sql). Re-runnable.
++-- (Index builds can take longer than the Data API's 45 s wait; they keep running and dbsql.py moves on.)
++
++-- search_products: substring search on name and description (ILIKE '%term%') needs trigram GIN indexes
++CREATE EXTENSION IF NOT EXISTS pg_trgm;
++CREATE INDEX IF NOT EXISTS products_name_trgm ON catalog.products USING gin (name gin_trgm_ops);
++CREATE INDEX IF NOT EXISTS products_description_trgm ON catalog.products USING gin (description gin_trgm_ops);
++
++-- browse_category: equality on category + range/sort on price
++CREATE INDEX IF NOT EXISTS products_category_price ON catalog.products (category, price);
++
++-- similar_products: approximate nearest neighbours, same operator as the query (<=> cosine)
++CREATE INDEX IF NOT EXISTS products_embedding_hnsw ON catalog.products USING hnsw (embedding vector_cosine_ops);
++
++ANALYZE catalog.products;
+diff -ruN a/missions/D8-product-search-optimization/lambdas/product_search.py b/missions/D8-product-search-optimization/lambdas/product_search.py
+--- a/missions/D8-product-search-optimization/lambdas/product_search.py	2026-11-15 05:27:55.000000000 +0000
++++ b/missions/D8-product-search-optimization/lambdas/product_search.py	2026-11-15 05:29:36.871854154 +0000
+@@ -19,23 +19,31 @@
+ 
+ 
+ def p(name, value):
+-    if isinstance(value, (int, float)):
+-        return {"name": name, "value": {"doubleValue": float(value)}}
++    if isinstance(value, bool):
++        return {"name": name, "value": {"booleanValue": value}}
++    if isinstance(value, int):
++        return {"name": name, "value": {"longValue": value}}
++    if isinstance(value, float):
++        return {"name": name, "value": {"doubleValue": value}}
+     return {"name": name, "value": {"stringValue": str(value)}}
+ 
+ 
+ def search_products(args):
+-    term = str(args.get("query", "")).strip()
+-    limit = int(args.get("limit", 10))
+-    rows = query("SELECT * FROM catalog.products WHERE name ILIKE :pat OR description ILIKE :pat",
+-                 [p("pat", f"%{term}%")])
++    """Filter, sort and limit IN the database; return only the columns the agent needs."""
++    term = str(args.get("query", "")).strip()[:100]
++    if len(term) < 3:
++        return []
++    limit = max(1, min(int(args.get("limit", 10)), 20))
++    sql = ("SELECT product_id, name, category, price, rating FROM catalog.products "
++           "WHERE (name ILIKE :pat OR description ILIKE :pat) AND in_stock")
++    params = [p("pat", f"%{term}%"), p("lim", limit)]
+     if args.get("category"):
+-        rows = [r for r in rows if r["category"] == args["category"]]
++        sql += " AND category = :cat"
++        params.append(p("cat", args["category"]))
+     if args.get("max_price"):
+-        rows = [r for r in rows if float(r["price"]) <= float(args["max_price"])]
+-    rows = [r for r in rows if r["in_stock"]]
+-    rows.sort(key=lambda r: float(r["rating"]), reverse=True)
+-    return [{k: r[k] for k in ("product_id", "name", "category", "price", "rating")} for r in rows[:limit]]
++        sql += " AND price <= :maxp"
++        params.append(p("maxp", float(args["max_price"])))
++    return query(sql + " ORDER BY rating DESC, product_id LIMIT :lim", params)
+ 
+ 
+ def browse_category(args):
