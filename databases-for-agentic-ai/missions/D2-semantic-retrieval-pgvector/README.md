@@ -10,7 +10,7 @@ cluster rather than in a separate vector service. One database, one backup and s
 and SQL joins between chunks and products later.
 
 - [`db/kb_schema.sql`](db/kb_schema.sql) creates the pgvector table `bedrock_kb.manual_chunks` (run by `setup.py` on every deploy).
-- The **Bedrock Knowledge Base** embeds the five manuals with **Titan Text Embeddings V2 (1024 dimensions)** and stores the chunks in that table,
+- The **Bedrock Knowledge Base** embeds the manuals with **Titan Text Embeddings V2 (1024 dimensions)** and stores the chunks in that table,
   logging in as `bedrock_kb_user` (credentials in the `riverbend-db-kb-*` secret) through the RDS Data API.
 - Trail Desk searches with its `search_manuals` tool (`Retrieve`).
 
@@ -34,7 +34,7 @@ $(terraform -chdir=missions/D2-semantic-retrieval-pgvector/terraform output -raw
 
 ## Objectives
 
-1. The knowledge base deploys, and a sync ingests all **5** documents with **0** failures.
+1. The knowledge base deploys, and a sync ingests all **6** documents with **0** failures.
 2. `bedrock_kb.manual_chunks` contains the chunks, with 1024-dimension embeddings.
 3. Trail Desk answers from the manuals.
 4. The KB role reads **only** its own secret, and `bedrock_kb_user` can only touch its own table.
@@ -43,7 +43,7 @@ $(terraform -chdir=missions/D2-semantic-retrieval-pgvector/terraform output -raw
 ## Done when
 
 ```bash
-python3 common/dbsql.py --sql "SELECT count(*), vector_dims(embedding) FROM bedrock_kb.manual_chunks GROUP BY 2"   # >= 5 rows, 1024
+python3 common/dbsql.py --sql "SELECT count(*), vector_dims(embedding) FROM bedrock_kb.manual_chunks GROUP BY 2"   # >= 6 rows, 1024
 python3 common/chat.py D2 "How do I bring back the water repellency on my Rain Shell Jacket?"   # wash 30C, tumble dry LOW 20 min, spray-on DWR ...
 python3 common/chat.py D2 "What is the warranty on an expedition pack?"                          # lifetime
 ```
@@ -81,6 +81,33 @@ What length of vector does Titan Text Embeddings V2 produce with `dimensions = 1
 - `rds:DescribeDBClusters` and the `rds-data:*` actions are correct.
 - Chunking (300 tokens, 15 % overlap) is fine for these documents.
 - The cluster may be auto-paused. `setup.py` wakes it before Terraform runs. If a sync fails with a resuming or connection error, just run it again.
+
+## Part B: metadata and audience filtering
+
+**Aligned with:** the SimuLearn *Create Trustworthy LLMs with a Vector Database* objectives "use metadata filtering to retrieve relevant results"
+and "troubleshoot data ingestion and metadata formatting".
+
+Once Part A works, a sixth document joins the library: `staff-discount-matrix.md`, which is **internal** and has staff discount codes
+and override rules. Every document now has a sidecar such as `returns-policy.md.metadata.json`:
+
+```json
+{ "metadataAttributes": { "audience": "customer", "doc_type": "policy" } }
+```
+
+The agent applies a metadata filter (env `KB_FILTER`, set by Terraform, never by the model) to every `Retrieve`, so customers can't
+retrieve staff material.
+
+```bash
+$(terraform -chdir=missions/D2-semantic-retrieval-pgvector/terraform output -raw sync_command)    # re-sync after Part A
+python3 missions/D2-semantic-retrieval-pgvector/scenarios/check.py
+python3 common/chat.py D2 "Are there any staff discount codes or price override rules?"
+```
+
+**Objectives:** every chunk has `audience` = `customer` or `staff`. The agent's filter never returns the staff document. Customers still get
+every customer document. Fix it so that a **future** document uploaded without a sidecar can't leak either.
+
+<details><summary>Hint B1</summary>Look at the agent's filter. Does it allow what is <i>known</i> to be safe, or block what is <i>known</i> to be unsafe? What happens to a document with no metadata?</details>
+<details><summary>Hint B2</summary>Compare the <code>audience</code> values across all sidecars, character by character. Filters compare values exactly.</details>
 
 ## Debrief questions
 

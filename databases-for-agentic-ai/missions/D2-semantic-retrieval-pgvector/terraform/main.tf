@@ -28,12 +28,12 @@ resource "aws_s3_bucket_public_access_block" "docs" {
 }
 
 resource "aws_s3_object" "docs" {
-  for_each     = fileset("${path.module}/../docs", "*.md")
+  for_each     = fileset("${path.module}/../docs", "*")
   bucket       = aws_s3_bucket.docs.id
   key          = "manuals/${each.value}"
   source       = "${path.module}/../docs/${each.value}"
   etag         = filemd5("${path.module}/../docs/${each.value}")
-  content_type = "text/markdown"
+  content_type = endswith(each.value, ".json") ? "application/json" : "text/markdown"
 }
 
 # ----------------------------------------------------------------- knowledge base on Aurora
@@ -195,6 +195,8 @@ resource "aws_bedrockagentcore_agent_runtime" "trail_desk" {
   environment_variables = {
     MODEL_ID = var.model_id
     KB_ID    = aws_bedrockagent_knowledge_base.manuals.id
+    # Part B: customers must never retrieve staff-only documents
+    KB_FILTER = jsonencode({ notEquals = { key = "audience", value = "staff" } })
   }
 
   depends_on = [aws_iam_role_policy.agent]

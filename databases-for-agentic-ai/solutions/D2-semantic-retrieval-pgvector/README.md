@@ -31,6 +31,21 @@ $(terraform -chdir=missions/D2-semantic-retrieval-pgvector/terraform output -raw
 | Root cause | A pgvector column `vector(N)` only accepts vectors of exactly N dimensions. 1536 is the dimension of older embedding models (Titan V1 and others), probably copied from another project |
 | Fix | `embedding vector(1024)`. `setup.py` drops and recreates the table, so re-run the **sync** |
 
+## Part B solution: metadata and audience filtering
+
+```bash
+patch -p1 < solutions/D2-semantic-retrieval-pgvector/fix-part-b.patch
+./scripts/deploy.sh D2 && $(terraform -chdir=missions/D2-semantic-retrieval-pgvector/terraform output -raw sync_command)
+python3 missions/D2-semantic-retrieval-pgvector/scenarios/check.py
+```
+
+| Fault | Root cause | Fix |
+|---|---|---|
+| B1: the staff document leaks | It has **no sidecar**, so it has no `audience`. The agent filter is a deny-list (`notEquals audience staff`), and a document without the key passes it | Add `staff-discount-matrix.md.metadata.json` with `"audience": "staff"`, **and** switch to an allow-list: `equals audience customer`. Unknown or missing metadata is then excluded by default |
+| B2: the warranty policy disappears for customers | Its sidecar says `"Customer"`. Filter values are compared exactly, so the allow-list excludes it | Normalise the value to `customer`. Validate sidecars against a schema (enumerated values) in CI |
+
+Re-sync after changing sidecars. Metadata is read during ingestion, so changing S3 objects alone doesn't update the vector store.
+
 ## Final table
 
 ```sql

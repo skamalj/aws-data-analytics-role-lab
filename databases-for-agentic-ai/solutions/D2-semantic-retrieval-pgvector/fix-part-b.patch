@@ -1,0 +1,37 @@
+diff -ruN a/missions/D2-semantic-retrieval-pgvector/docs/staff-discount-matrix.md.metadata.json b/missions/D2-semantic-retrieval-pgvector/docs/staff-discount-matrix.md.metadata.json
+--- a/missions/D2-semantic-retrieval-pgvector/docs/staff-discount-matrix.md.metadata.json	1970-01-01 00:00:00.000000000 +0000
++++ b/missions/D2-semantic-retrieval-pgvector/docs/staff-discount-matrix.md.metadata.json	2026-11-15 05:43:10.217626518 +0000
+@@ -0,0 +1,6 @@
++{
++  "metadataAttributes": {
++    "audience": "staff",
++    "doc_type": "internal"
++  }
++}
+\ No newline at end of file
+diff -ruN a/missions/D2-semantic-retrieval-pgvector/docs/warranty-policy.md.metadata.json b/missions/D2-semantic-retrieval-pgvector/docs/warranty-policy.md.metadata.json
+--- a/missions/D2-semantic-retrieval-pgvector/docs/warranty-policy.md.metadata.json	2026-11-15 05:42:38.777878110 +0000
++++ b/missions/D2-semantic-retrieval-pgvector/docs/warranty-policy.md.metadata.json	2026-11-15 05:43:10.217685788 +0000
+@@ -1,6 +1,6 @@
+ {
+   "metadataAttributes": {
+-    "audience": "Customer",
++    "audience": "customer",
+     "doc_type": "policy"
+   }
+ }
+\ No newline at end of file
+diff -ruN a/missions/D2-semantic-retrieval-pgvector/terraform/main.tf b/missions/D2-semantic-retrieval-pgvector/terraform/main.tf
+--- a/missions/D2-semantic-retrieval-pgvector/terraform/main.tf	2026-11-15 05:42:38.797066264 +0000
++++ b/missions/D2-semantic-retrieval-pgvector/terraform/main.tf	2026-11-15 05:43:10.217808519 +0000
+@@ -195,8 +195,8 @@
+   environment_variables = {
+     MODEL_ID = var.model_id
+     KB_ID    = aws_bedrockagent_knowledge_base.manuals.id
+-    # Part B: customers must never retrieve staff-only documents
+-    KB_FILTER = jsonencode({ notEquals = { key = "audience", value = "staff" } })
++    # Part B: allow-list, not deny-list - documents with missing or unexpected metadata are excluded
++    KB_FILTER = jsonencode({ equals = { key = "audience", value = "customer" } })
+   }
+ 
+   depends_on = [aws_iam_role_policy.agent]

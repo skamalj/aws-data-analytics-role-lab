@@ -10,6 +10,7 @@ Features switch on with environment variables, so every mission deploys the same
   GATEWAY_URL         AgentCore Gateway MCP endpoint; tools are listed and called over MCP,
                       requests SigV4-signed with the runtime role                        [mission 2]
   KB_ID               Bedrock Knowledge Base id, exposed as the tool search_manuals       [mission 3]
+  KB_FILTER           Optional Retrieve metadata filter (JSON) applied to every search
   MEMORY_ID           AgentCore Memory id; short-term events + long-term records          [mission 4]
   MEMORY_NAMESPACE    Namespace template to read long-term records from, e.g. /users/{actorId}/preferences
   STORE_TABLE         DynamoDB table with store information, exposed as the tool store_info  [mission 5]
@@ -109,8 +110,11 @@ class Tools:
     # ---- Knowledge Base
     def _search_manuals(self, args):
         kb = session.client("bedrock-agent-runtime", config=CFG)
+        vsc = {"numberOfResults": 4}
+        if env("KB_FILTER"):                         # metadata filter set by the application (JSON), never by the model
+            vsc["filter"] = json.loads(env("KB_FILTER"))
         out = kb.retrieve(knowledgeBaseId=env("KB_ID"), retrievalQuery={"text": args["query"]},
-                          retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": 4}})
+                          retrievalConfiguration={"vectorSearchConfiguration": vsc})
         hits = [{"text": r["content"]["text"],
                  "source": r.get("location", {}).get("s3Location", {}).get("uri"),
                  "score": round(r.get("score", 0), 3)} for r in out["retrievalResults"]]
