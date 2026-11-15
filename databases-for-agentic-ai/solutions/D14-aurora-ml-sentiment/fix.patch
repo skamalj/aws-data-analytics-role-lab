@@ -1,0 +1,70 @@
+diff -ruN a/missions/D14-aurora-ml-sentiment/db/refresh_sentiment.sql b/missions/D14-aurora-ml-sentiment/db/refresh_sentiment.sql
+--- a/missions/D14-aurora-ml-sentiment/db/refresh_sentiment.sql	2026-11-15 05:40:42.000000000 +0000
++++ b/missions/D14-aurora-ml-sentiment/db/refresh_sentiment.sql	2026-11-15 05:41:36.688348997 +0000
+@@ -1,2 +1,21 @@
+--- Sentiment refresh job (run by post_deploy.py after terraform). Not implemented yet.
+-SELECT 1;
++-- Sentiment refresh job (run by post_deploy.py after terraform, re-runnable).
++-- Score each review ONCE with Comprehend and store the result; the agent reads the stored result.
++CREATE EXTENSION IF NOT EXISTS aws_ml CASCADE;
++
++ALTER TABLE commerce.reviews ADD COLUMN IF NOT EXISTS sentiment text;
++ALTER TABLE commerce.reviews ADD COLUMN IF NOT EXISTS sentiment_confidence real;
++
++-- Only new / unscored reviews: Comprehend is billed per call
++UPDATE commerce.reviews r
++   SET (sentiment, sentiment_confidence) =
++       (SELECT s.sentiment, s.confidence FROM aws_comprehend.detect_sentiment(r.review_text, 'en') s)
++ WHERE r.sentiment IS NULL;
++
++-- Curated, agent-facing view: aggregates only, no review text or customer ids
++CREATE OR REPLACE VIEW reporting.product_review_sentiment AS
++SELECT product_id, coalesce(sentiment, 'PENDING') AS sentiment, count(*) AS reviews, round(avg(stars), 2) AS avg_stars
++FROM commerce.reviews
++GROUP BY product_id, coalesce(sentiment, 'PENDING');
++
++GRANT USAGE ON SCHEMA reporting TO trail_desk_app;
++GRANT SELECT ON reporting.product_review_sentiment TO trail_desk_app;
+diff -ruN a/missions/D14-aurora-ml-sentiment/lambdas/review_insights.py b/missions/D14-aurora-ml-sentiment/lambdas/review_insights.py
+--- a/missions/D14-aurora-ml-sentiment/lambdas/review_insights.py	2026-11-15 05:40:42.000000000 +0000
++++ b/missions/D14-aurora-ml-sentiment/lambdas/review_insights.py	2026-11-15 05:41:36.688389468 +0000
+@@ -1,6 +1,6 @@
+ """
+ review_insights tool for Trail Desk's customer-intelligence questions ("how do customers feel about P101?").
+-Sentiment comes from Amazon Comprehend, called from SQL through Aurora machine learning (aws_ml).
++Sentiment is computed once per review by Amazon Comprehend (Aurora machine learning) and stored.
+ """
+ import json
+ import os
+@@ -16,9 +16,9 @@
+     product = str(event.get("product_id", ""))
+     t0 = time.perf_counter()
+     r = rds.execute_statement(
+-        sql="SELECT s.sentiment, count(*) AS reviews "
+-            "FROM commerce.reviews r, aws_comprehend.detect_sentiment(r.review_text, 'en') s "
+-            "WHERE r.product_id = :p GROUP BY s.sentiment ORDER BY reviews DESC",
++        # read the pre-computed sentiment through the curated view - no Comprehend calls per question
++        sql="SELECT sentiment, reviews, avg_stars FROM reporting.product_review_sentiment "
++            "WHERE product_id = :p ORDER BY reviews DESC",
+         parameters=[{"name": "p", "value": {"stringValue": product}}], formatRecordsAs="JSON", **DB)
+     return {"product_id": product, "sentiment": json.loads(r.get("formattedRecords") or "[]"),
+             "db_ms": round((time.perf_counter() - t0) * 1000, 1)}
+diff -ruN a/missions/D14-aurora-ml-sentiment/terraform/main.tf b/missions/D14-aurora-ml-sentiment/terraform/main.tf
+--- a/missions/D14-aurora-ml-sentiment/terraform/main.tf	2026-11-15 05:41:17.000000000 +0000
++++ b/missions/D14-aurora-ml-sentiment/terraform/main.tf	2026-11-15 05:41:36.688279024 +0000
+@@ -27,13 +27,13 @@
+   role = aws_iam_role.aurora_ml.id
+   policy = jsonencode({
+     Version   = "2012-10-17"
+-    Statement = [{ Effect = "Allow", Action = ["comprehend:DetectDominantLanguage"], Resource = "*" }]
++    Statement = [{ Effect = "Allow", Action = ["comprehend:DetectSentiment", "comprehend:BatchDetectSentiment"], Resource = "*" }]
+   })
+ }
+ 
+ resource "aws_rds_cluster_role_association" "comprehend" {
+   db_cluster_identifier = local.db.cluster_id
+-  feature_name          = "SageMaker"
++  feature_name          = "Comprehend" # Aurora ML features: Comprehend, SageMaker, Bedrock - one association each
+   role_arn              = aws_iam_role.aurora_ml.arn
+ }
+ 
