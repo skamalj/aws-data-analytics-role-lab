@@ -1,0 +1,47 @@
+diff -ruN a/missions/D11-high-speed-rag/db/schema.sql b/missions/D11-high-speed-rag/db/schema.sql
+--- a/missions/D11-high-speed-rag/db/schema.sql	2026-11-15 05:34:44.000000000 +0000
++++ b/missions/D11-high-speed-rag/db/schema.sql	2026-11-15 05:35:18.174594181 +0000
+@@ -8,7 +8,7 @@
+   doc       text NOT NULL,
+   chunk_no  int  NOT NULL,
+   content   text NOT NULL,
+-  embedding vector(1024) NOT NULL
++  embedding vector(512) NOT NULL       -- must match EMBED_DIMENSIONS of the query side (post_deploy.py re-embeds at this size)
+ );
+ CREATE INDEX d11_chunks_embedding_idx ON knowledge.d11_chunks USING hnsw (embedding vector_cosine_ops);
+ GRANT USAGE ON SCHEMA knowledge TO trail_desk_app;
+diff -ruN a/missions/D11-high-speed-rag/lambdas/fast_answer.py b/missions/D11-high-speed-rag/lambdas/fast_answer.py
+--- a/missions/D11-high-speed-rag/lambdas/fast_answer.py	2026-11-15 05:34:44.000000000 +0000
++++ b/missions/D11-high-speed-rag/lambdas/fast_answer.py	2026-11-15 05:35:18.175017541 +0000
+@@ -14,17 +14,26 @@
+ DIMS = int(os.environ.get("EMBED_DIMENSIONS", "1024"))
+ MODEL = "amazon.titan-embed-text-v2:0"
+ 
++# Create SDK clients ONCE per execution environment (cold start), not on every invocation:
++# warm invocations then reuse their connections (TLS handshakes, credential resolution).
++rds = boto3.client("rds-data")
++bedrock = boto3.client("bedrock-runtime")
++cache = boto3.resource("dynamodb").Table(os.environ["CACHE_TABLE"])
++db = {"resourceArn": os.environ["CLUSTER_ARN"], "secretArn": os.environ["DB_SECRET_ARN"], "database": os.environ["DB_NAME"]}
++
++
++def cache_key(question):
++    """Deterministic: same model + dimensions + (normalised) question -> same key."""
++    normalised = " ".join(question.lower().split())
++    return hashlib.sha256(f"{MODEL}|{DIMS}|{normalised}".encode()).hexdigest()
++
+ 
+ def handler(event, context):
+     t0 = time.perf_counter()
+-    rds = boto3.client("rds-data")
+-    bedrock = boto3.client("bedrock-runtime")
+-    cache = boto3.resource("dynamodb").Table(os.environ["CACHE_TABLE"])
+-    db = {"resourceArn": os.environ["CLUSTER_ARN"], "secretArn": os.environ["DB_SECRET_ARN"], "database": os.environ["DB_NAME"]}
+     t_init = time.perf_counter()
+ 
+     question = str(event.get("question", "")).strip()
+-    key = f"{MODEL}:{DIMS}:{question}:{time.time()}"
++    key = cache_key(question)
+     hit = cache.get_item(Key={"cache_key": key}).get("Item")
+     if hit:
+         vec = hit["vector"]

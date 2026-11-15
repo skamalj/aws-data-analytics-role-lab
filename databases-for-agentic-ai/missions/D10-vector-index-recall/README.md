@@ -32,7 +32,7 @@ python3 missions/D10-vector-index-recall/scenarios/check.py
 
 ## Done when
 
-`check.py` reports 7/7 checks passed.
+`check.py` reports 5/5 checks passed.
 
 ## Investigation toolkit
 
