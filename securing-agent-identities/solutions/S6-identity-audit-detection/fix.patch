@@ -1,0 +1,51 @@
+diff -ruN a/missions/S6-identity-audit-detection/terraform/main.tf b/missions/S6-identity-audit-detection/terraform/main.tf
+--- a/missions/S6-identity-audit-detection/terraform/main.tf	2026-11-15 08:05:19.000000000 +0000
++++ b/missions/S6-identity-audit-detection/terraform/main.tf	2026-11-15 08:05:19.931742591 +0000
+@@ -55,7 +55,7 @@
+   role = aws_iam_role.trail_to_logs.id
+   policy = jsonencode({
+     Version   = "2012-10-17"
+-    Statement = [{ Effect = "Allow", Action = ["logs:CreateLogStream"], Resource = "${aws_cloudwatch_log_group.trail.arn}:*" }]
++    Statement = [{ Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = "${aws_cloudwatch_log_group.trail.arn}:*" }]
+   })
+ }
+ 
+@@ -74,9 +74,18 @@
+       field  = "eventCategory"
+       equals = ["Management"]
+     }
++  }
++
++  # token operations on workload identities (GetWorkloadAccessToken*, ...) are data events: opt in explicitly
++  advanced_event_selector {
++    name = "AgentCore Identity data events"
++    field_selector {
++      field  = "eventCategory"
++      equals = ["Data"]
++    }
+     field_selector {
+-      field  = "readOnly"
+-      equals = ["true"]
++      field  = "resources.type"
++      equals = ["AWS::BedrockAgentCore::WorkloadIdentity"]
+     }
+   }
+ 
+@@ -91,7 +100,7 @@
+ resource "aws_cloudwatch_log_metric_filter" "token_denied" {
+   name           = "agentcore-token-access-denied"
+   log_group_name = aws_cloudwatch_log_group.trail.name
+-  pattern        = "{ ($.eventSource = \"bedrock.amazonaws.com\") && ($.errorCode = \"AccessDenied*\") }"
++  pattern        = "{ ($.eventSource = \"bedrock-agentcore.amazonaws.com\") && ($.errorCode = \"AccessDenied*\") }"
+   metric_transformation {
+     name      = "TokenAccessDenied"
+     namespace = local.namespace
+@@ -128,7 +137,7 @@
+   alarm_name          = "${local.p}-workload-identity-tampering"
+   alarm_description   = "A workload identity was re-tagged, updated or deleted"
+   namespace           = local.namespace
+-  metric_name         = "WorkloadIdentityTamper"
++  metric_name         = "WorkloadIdentityTampering"
+   statistic           = "Sum"
+   period              = 300
+   evaluation_periods  = 1

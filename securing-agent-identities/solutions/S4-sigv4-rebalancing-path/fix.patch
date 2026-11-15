@@ -1,0 +1,43 @@
+diff -ruN a/missions/S4-sigv4-rebalancing-path/terraform/main.tf b/missions/S4-sigv4-rebalancing-path/terraform/main.tf
+--- a/missions/S4-sigv4-rebalancing-path/terraform/main.tf	2026-11-15 08:02:10.000000000 +0000
++++ b/missions/S4-sigv4-rebalancing-path/terraform/main.tf	2026-11-15 08:02:13.911168925 +0000
+@@ -31,7 +31,7 @@
+       {
+         Sid    = "LedgerToken"
+         Effect = "Allow"
+-        Action = ["bedrock-agentcore:GetResourceApiKey"]
++        Action = ["bedrock-agentcore:GetResourceOauth2Token"]
+         Resource = ["${local.arn}:token-vault/default", "${local.arn}:token-vault/default/oauth2credentialprovider/${local.b.ledger_provider_name}",
+         "${local.arn}:workload-identity-directory/default", local.identity]
+       },
+@@ -63,13 +63,7 @@
+     network_mode = "PUBLIC"
+   }
+ 
+-  # copied from the advisor agent's template
+-  authorizer_configuration {
+-    custom_jwt_authorizer {
+-      discovery_url  = local.b.discovery_url
+-      allowed_scopes = ["${local.b.scope_prefix}/advisor.invoke"]
+-    }
+-  }
++  # no authorizer_configuration: the runtime uses IAM (SigV4) authorization for every caller
+ 
+   environment_variables = {
+     AGENT_NAME    = "rebalancer"
+@@ -94,10 +88,11 @@
+   policy = jsonencode({
+     Version = "2012-10-17"
+     Statement = [{
+-      Sid      = "InvokeRebalancer"
+-      Effect   = "Allow"
+-      Action   = ["bedrock-agentcore:InvokeAgentRuntime"]
+-      Resource = ["${local.arn}:runtime/larchmont_s4_rebalancer"]
++      Sid    = "InvokeRebalancer"
++      Effect = "Allow"
++      # ForUser: the service passes runtimeUserId (the portfolio manager) - only trusted callers may do that
++      Action   = ["bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:InvokeAgentRuntimeForUser"]
++      Resource = [aws_bedrockagentcore_agent_runtime.rebalancer.agent_runtime_arn, "${aws_bedrockagentcore_agent_runtime.rebalancer.agent_runtime_arn}/*"]
+     }]
+   })
+ }

@@ -8,6 +8,9 @@
 >
 > And: [**Data Lakehouse Demonstrated: break-fix challenges**](data-lakehouse-demonstrated/README.md), seven challenges + a 110-minute mock exam on
 > Apache Iceberg (Glue, Athena), Step Functions/EventBridge pipelines, Lake Formation LF-Tags and data cell filters, and Firehose → Iceberg upserts.
+>
+> And: [**Securing Agent Identities Demonstrated: break-fix challenges**](securing-agent-identities/README.md), six challenges + a 135-minute mock exam on
+> AgentCore workload identities (ABAC, self-hosted EC2 agents), scoped JWT and SigV4 inbound paths, JWT migration, and CloudTrail/CloudWatch detection.
 
 Twelve hands-on labs modelled on the **AWS Cloud Quest: Data Analytics** role, built to run in
 **your own AWS account**. Each lab has three parts:

@@ -1,0 +1,48 @@
+diff -ruN a/missions/S2-self-hosted-workload-identity/terraform/main.tf b/missions/S2-self-hosted-workload-identity/terraform/main.tf
+--- a/missions/S2-self-hosted-workload-identity/terraform/main.tf	2026-11-15 07:59:39.000000000 +0000
++++ b/missions/S2-self-hosted-workload-identity/terraform/main.tf	2026-11-15 07:59:39.725304061 +0000
+@@ -11,7 +11,11 @@
+ }
+ 
+ # ----------------------------------------------------------------- workload identity
+-# SEC-114: "provision the research agent's workload identity" - still open.
++# SEC-114: a self-hosted agent has no runtime to create an identity for it, so we provision one explicitly.
++resource "aws_bedrockagentcore_workload_identity" "research" {
++  name = local.agent
++  tags = { team = "research", agent = "research", hosting = "ec2" }
++}
+ 
+ # ----------------------------------------------------------------- configuration (Parameter Store)
+ resource "aws_ssm_parameter" "workload_name" {
+@@ -46,7 +50,7 @@
+       {
+         Sid    = "WorkloadIdentity"
+         Effect = "Allow"
+-        Action = ["bedrock-agentcore:GetWorkloadAccessTokenForJWT"]
++        Action = ["bedrock-agentcore:GetWorkloadAccessToken"]
+         Resource = ["${local.arn}:workload-identity-directory/default",
+         "${local.arn}:workload-identity-directory/default/workload-identity/${local.agent}"]
+       },
+@@ -57,10 +61,22 @@
+         Resource = ["${local.arn}:token-vault/default", "${local.arn}:token-vault/default/apikeycredentialprovider/${local.b.market_data_provider_name}",
+         "${local.arn}:workload-identity-directory/default", "${local.arn}:workload-identity-directory/default/workload-identity/${local.agent}"]
+       },
++      {
++        # the token vault keeps the API key in Secrets Manager and reads it with the caller's permissions
++        Sid      = "TokenVaultSecret"
++        Effect   = "Allow"
++        Action   = ["secretsmanager:GetSecretValue"]
++        Resource = local.b.market_data_secret_arn
++      },
+     ]
+   })
+ }
+ 
++resource "aws_iam_role_policy_attachment" "ssm_core" {
++  role       = aws_iam_role.agent_host.name
++  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
++}
++
+ resource "aws_iam_instance_profile" "agent_host" {
+   name_prefix = "${local.p}-host-"
+   role        = aws_iam_role.agent_host.name

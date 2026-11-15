@@ -1,0 +1,17 @@
+diff -ruN a/missions/S3-scoped-jwt-inbound/terraform/main.tf b/missions/S3-scoped-jwt-inbound/terraform/main.tf
+--- a/missions/S3-scoped-jwt-inbound/terraform/main.tf	2026-11-15 08:00:25.000000000 +0000
++++ b/missions/S3-scoped-jwt-inbound/terraform/main.tf	2026-11-15 08:00:50.565496319 +0000
+@@ -88,9 +88,10 @@
+ 
+   authorizer_configuration {
+     custom_jwt_authorizer {
+-      discovery_url    = "https://cognito-idp.${local.b.region}.amazonaws.com/${aws_cognito_user_pool.staging.id}/.well-known/openid-configuration"
+-      allowed_audience = ["larchmont"]
+-      allowed_clients  = [aws_cognito_user_pool_client.advisor_portal.id, aws_cognito_user_pool_client.analytics.id]
++      discovery_url   = local.b.discovery_url # the workforce pool, never staging
++      allowed_clients = [aws_cognito_user_pool_client.advisor_portal.id]
++      allowed_scopes  = ["${local.scopes}/advisor.invoke"]
++      # no allowed_audience: Cognito access tokens carry client_id, not aud
+     }
+   }
+ 

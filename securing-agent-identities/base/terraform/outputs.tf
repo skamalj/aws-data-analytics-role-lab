@@ -1,0 +1,17 @@
+output "region" { value = var.region }
+output "account_id" { value = local.account }
+output "user_pool_id" { value = aws_cognito_user_pool.workforce.id }
+output "user_pool_arn" { value = aws_cognito_user_pool.workforce.arn }
+output "discovery_url" { value = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.workforce.id}/.well-known/openid-configuration" }
+output "token_url" { value = "https://${aws_cognito_user_pool_domain.workforce.domain}.auth.${var.region}.amazoncognito.com/oauth2/token" }
+output "scope_prefix" { value = aws_cognito_resource_server.agents.identifier }
+output "ledger_provider_name" { value = aws_bedrockagentcore_oauth2_credential_provider.ledger.name }
+output "ledger_provider_arn" { value = aws_bedrockagentcore_oauth2_credential_provider.ledger.credential_provider_arn }
+output "ledger_secret_arn" { value = aws_bedrockagentcore_oauth2_credential_provider.ledger.client_secret_arn[0].secret_arn }
+output "market_data_provider_name" { value = aws_bedrockagentcore_api_key_credential_provider.market_data.name }
+output "market_data_provider_arn" { value = aws_bedrockagentcore_api_key_credential_provider.market_data.credential_provider_arn }
+output "market_data_secret_arn" { value = aws_bedrockagentcore_api_key_credential_provider.market_data.api_key_secret_arn[0].secret_arn }
+output "code_bucket" { value = aws_s3_bucket.code.id }
+output "code_key" { value = aws_s3_object.agent_zip.key }
+output "code_version" { value = aws_s3_object.agent_zip.version_id }
+output "script_key" { value = aws_s3_object.agent_py.key }

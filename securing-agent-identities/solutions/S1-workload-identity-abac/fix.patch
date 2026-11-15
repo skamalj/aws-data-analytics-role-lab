@@ -1,0 +1,44 @@
+diff -ruN a/missions/S1-workload-identity-abac/terraform/main.tf b/missions/S1-workload-identity-abac/terraform/main.tf
+--- a/missions/S1-workload-identity-abac/terraform/main.tf	2026-11-15 07:57:44.000000000 +0000
++++ b/missions/S1-workload-identity-abac/terraform/main.tf	2026-11-15 07:58:22.830714230 +0000
+@@ -22,7 +22,7 @@
+ 
+ resource "aws_bedrockagentcore_workload_identity" "reporting" {
+   name = "${local.p}-reporting-agent"
+-  tags = { team = "advisory", agent = "regulatory-reporting" }
++  tags = { team = "compliance", agent = "regulatory-reporting" }
+ }
+ 
+ # ----------------------------------------------------------------- team operator roles (tagged principals)
+@@ -30,7 +30,7 @@
+   role_tags = {
+     advisory   = { team = "advisory" }
+     trading    = { team = "trading" }
+-    compliance = { department = "compliance" }
++    compliance = { team = "compliance" }
+   }
+ }
+ 
+@@ -62,12 +62,19 @@
+         Effect    = "Allow"
+         Action    = ["bedrock-agentcore:GetWorkloadAccessToken", "bedrock-agentcore:GetWorkloadAccessTokenForJWT", "bedrock-agentcore:GetWorkloadAccessTokenForUserId"]
+         Resource  = "${local.wi}/workload-identity/*"
+-        Condition = { StringEquals = { "aws:RequestTag/team" = "$${aws:PrincipalTag/team}" } }
++        Condition = { StringEquals = { "aws:ResourceTag/team" = "$${aws:PrincipalTag/team}" } }
+       },
+       {
+-        Sid      = "InspectAndLabel"
++        Sid      = "Inspect"
+         Effect   = "Allow"
+-        Action   = ["bedrock-agentcore:GetWorkloadIdentity", "bedrock-agentcore:ListWorkloadIdentities", "bedrock-agentcore:ListTagsForResource", "bedrock-agentcore:TagResource", "bedrock-agentcore:UntagResource"]
++        Action   = ["bedrock-agentcore:GetWorkloadIdentity", "bedrock-agentcore:ListWorkloadIdentities", "bedrock-agentcore:ListTagsForResource"]
++        Resource = "*"
++      },
++      {
++        # the tags ARE the access policy: operators must never be able to change them
++        Sid      = "ProtectOwnershipTags"
++        Effect   = "Deny"
++        Action   = ["bedrock-agentcore:TagResource", "bedrock-agentcore:UntagResource"]
+         Resource = "*"
+       },
+     ]
