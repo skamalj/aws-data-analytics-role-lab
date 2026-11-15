@@ -3,6 +3,7 @@
 *_result.json
 comparison_results.json
 sample_*.json
+notebooks/data/embeddings_cache.json
 __pycache__/
 .ipynb_checkpoints/
 .venv/

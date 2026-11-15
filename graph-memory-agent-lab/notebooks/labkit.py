@@ -72,6 +72,42 @@ def pretty(obj):
     print(json.dumps(obj, indent=2, default=str))
 
 
+DATA = os.path.join(ROOT, "notebooks", "data")
+_CACHE = os.path.join(DATA, "embeddings_cache.json")
+
+
+def corpus():
+    """The 40 insurance clauses used by the pgvector and OpenSearch walkthroughs (07, 08)."""
+    with open(os.path.join(DATA, "clauses.json")) as f:
+        return json.load(f)
+
+
+def embed(texts, dimensions=None):
+    """Titan Text Embeddings V2 (normalised) for a list of texts, cached in notebooks/data/embeddings_cache.json,
+    so re-running a walkthrough makes no Bedrock calls for text it has already embedded."""
+    import hashlib
+    dims = int(dimensions or os.environ.get("EMBEDDING_DIMENSIONS", "1024"))
+    model = os.environ.get("BEDROCK_EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
+    cache = {}
+    if os.path.exists(_CACHE):
+        with open(_CACHE) as f:
+            cache = json.load(f)
+    rt, changed, out = None, False, []
+    for text in texts:
+        key = hashlib.sha256(f"{model}|{dims}|{text}".encode()).hexdigest()
+        if key not in cache:
+            rt = rt or boto3.client("bedrock-runtime", region_name=REGION)
+            body = json.dumps({"inputText": text, "dimensions": dims, "normalize": True})
+            resp = rt.invoke_model(modelId=model, contentType="application/json", accept="application/json", body=body)
+            cache[key] = json.loads(resp["body"].read())["embedding"]
+            changed = True
+        out.append(cache[key])
+    if changed:
+        with open(_CACHE, "w") as f:
+            json.dump(cache, f)
+    return out
+
+
 def grade(*goals):
     """Run the local grader for the given goals (it reads your uploaded evidence from S3)."""
     import subprocess

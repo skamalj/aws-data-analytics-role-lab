@@ -41,6 +41,17 @@ or later.
 Start with [`00_setup_and_seed`](notebooks/00_setup_and_seed.ipynb) and finish with the bonus [`06_grounded_assistant`](notebooks/06_grounded_assistant.ipynb).
 Do the goals **in order**: goal 4's evidence depends on the data seeded in goal 3.
 
+### Technology walkthroughs (optional, ungraded)
+
+Deep dives into the two vector engines agentic systems lean on. Each runs against the lab's own Aurora and OpenSearch, using 40
+insurance clauses ([`notebooks/data/clauses.json`](notebooks/data/clauses.json)) embedded once with Titan and cached locally. Each works in
+a **scratch schema or index** and cleans up after itself, so it never touches the graded data.
+
+| Notebook | Covers | Most useful before |
+|---|---|---|
+| [`07_pgvector_walkthrough`](notebooks/07_pgvector_walkthrough.ipynb) | `vector` / `halfvec` / `sparsevec`; the `<->` `<=>` `<#>` operators and matching operator classes; `EXPLAIN`; HNSW (`ef_search`) vs IVFFlat (`probes`) **recall measured against exact search** on 20k vectors; filtered search and 0.8 **iterative scans**; **hybrid full-text + vector RRF in one SQL query**; agent memory tables; **row-level security** per tenant; Aurora notes | goals 3–4 |
+| [`08_opensearch_walkthrough`](notebooks/08_opensearch_walkthrough.ipynb) | Serverless collections, the encryption/network/data-access policies and SigV4; `knn_vector` mapping (engine, space type, HNSW); eventual consistency and **upsert by business key** without document ids; **analyzers** (`english` vs `standard`); kNN scores vs BM25; **post-filter vs efficient filtered kNN**; client RRF vs **server-side hybrid pipelines**; an MCP retrieval tool with the **tenant taken from trusted context**; how Bedrock Knowledge Bases use it | goal 4 |
+
 Each notebook follows the same pattern:
 1. a short concept explainer;
 2. cells that **reproduce the defect live**;
@@ -71,7 +82,7 @@ jupyter lab notebooks/                # open 00_setup_and_seed, kernel "gmlab"
 | Path | What |
 |---|---|
 | `src/` | The lab's code **with the five gaps**, unchanged except for one laptop adaptation (below) |
-| `notebooks/` | `00`–`06` plus `labkit.py` (loads `.env`, reloads edited modules, uploads evidence, runs the grader) |
+| `notebooks/` | `00`–`06` (setup and goals), `07`–`08` (walkthroughs), `data/clauses.json`, and `labkit.py` (loads `.env`, reloads edited modules, uploads evidence, cached Titan embeddings, runs the grader) |
 | `infra/terraform/` | DynamoDB, S3, IAM (with the leak), OpenSearch Serverless, Aurora + pgvector |
 | `scripts/make_env.py` | Writes `.env` from the Terraform outputs plus your Neo4j settings |
 | `scripts/check_evidence.py` | Local grader: reads your evidence from S3 and checks goal 2 in IAM |
