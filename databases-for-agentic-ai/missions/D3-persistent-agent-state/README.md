@@ -1,5 +1,6 @@
 # Mission D3: Resume fails, and then the state explodes
 
+**Exam objective:** *Configure Amazon DynamoDB for agent memory*
 **Skills:** persistent agent state in Amazon DynamoDB, LangGraph checkpointers ([`langgraph-dynamodb-checkpoint`](https://pypi.org/project/langgraph-dynamodb-checkpoint/)), `thread_id` design, key schemas, TTL, DynamoDB's 400 KB item limit, bounded message history ([`agentstate-reducer`](https://pypi.org/project/agentstate-reducer/)), least privilege
 **Time:** 45–60 minutes  |  **Deploy:** `./scripts/deploy.sh D3` (doesn't need the base stack)
 

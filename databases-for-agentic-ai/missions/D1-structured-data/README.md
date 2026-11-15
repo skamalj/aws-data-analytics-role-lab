@@ -1,5 +1,6 @@
 # Mission D1: The agent sees nothing, or everything
 
+**Exam objective:** *Configure Amazon Aurora PostgreSQL for agent access*
 **Skills:** least-privilege database identities, curated views, Secrets Manager credentials with the RDS Data API, Gateway Lambda tools over SQL, SQL injection through model-supplied arguments, bounded results
 **Time:** 40–50 minutes  |  **Needs:** `./scripts/deploy.sh base` (once), then `./scripts/deploy.sh D1`
 

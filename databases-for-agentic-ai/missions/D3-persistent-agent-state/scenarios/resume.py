@@ -19,3 +19,4 @@ ok = any(t["tool"] == "create_return" and str(t["input"].get("order_id", "")).up
          for t in r2.get("tools_used", []))
 print("\nRESUME:", "PASS - the return for O2003 was created in the new session" if ok else
       "FAIL - the agent did not continue the O2003 return in the new session")
+sys.exit(0 if ok else 1)

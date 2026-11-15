@@ -1,9 +1,9 @@
 diff -ruN a/missions/D1-structured-data/db/grants.sql b/missions/D1-structured-data/db/grants.sql
---- a/missions/D1-structured-data/db/grants.sql	2026-11-11 11:55:03.000000000 +0000
-+++ b/missions/D1-structured-data/db/grants.sql	2026-11-11 11:56:14.045856643 +0000
+--- a/missions/D1-structured-data/db/grants.sql	2026-11-15 05:45:37.000000000 +0000
++++ b/missions/D1-structured-data/db/grants.sql	2026-11-15 05:45:37.932437980 +0000
 @@ -3,4 +3,9 @@
  REVOKE ALL ON ALL TABLES IN SCHEMA commerce FROM trail_desk_app;
- REVOKE ALL ON ALL TABLES IN SCHEMA reporting FROM trail_desk_app;
+ REVOKE ALL ON reporting.order_summary, reporting.category_activity FROM trail_desk_app;
  
 -GRANT USAGE ON SCHEMA commerce TO trail_desk_app;
 +REVOKE USAGE ON SCHEMA commerce FROM trail_desk_app;
@@ -14,7 +14,7 @@ diff -ruN a/missions/D1-structured-data/db/grants.sql b/missions/D1-structured-d
 +GRANT SELECT ON reporting.order_summary, reporting.category_activity TO trail_desk_app;
 diff -ruN a/missions/D1-structured-data/lambdas/order_tools.py b/missions/D1-structured-data/lambdas/order_tools.py
 --- a/missions/D1-structured-data/lambdas/order_tools.py	2026-11-11 11:55:03.000000000 +0000
-+++ b/missions/D1-structured-data/lambdas/order_tools.py	2026-11-11 11:56:14.046187266 +0000
++++ b/missions/D1-structured-data/lambdas/order_tools.py	2026-11-15 05:45:37.932486700 +0000
 @@ -6,6 +6,7 @@
  """
  import json
@@ -46,7 +46,7 @@ diff -ruN a/missions/D1-structured-data/lambdas/order_tools.py b/missions/D1-str
  
 diff -ruN a/missions/D1-structured-data/terraform/main.tf b/missions/D1-structured-data/terraform/main.tf
 --- a/missions/D1-structured-data/terraform/main.tf	2026-11-11 11:55:34.000000000 +0000
-+++ b/missions/D1-structured-data/terraform/main.tf	2026-11-11 11:56:14.045466997 +0000
++++ b/missions/D1-structured-data/terraform/main.tf	2026-11-15 05:45:37.932345589 +0000
 @@ -71,7 +71,7 @@
    environment {
      variables = {

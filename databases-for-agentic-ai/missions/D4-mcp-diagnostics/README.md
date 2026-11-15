@@ -1,5 +1,6 @@
 # Mission D4: The debug tool is a backdoor
 
+**Exam objective:** *Configure the Aurora MCP server for agent debugging*
 **Skills:** Model Context Protocol servers on AgentCore Runtime (`server_protocol = "MCP"`), tool schemas vs handlers, read-only diagnostic identities (PostgreSQL + IAM), result limits and redaction, separating diagnostics from administration
 **Time:** 40–50 minutes  |  **Needs:** `./scripts/deploy.sh base`, then `./scripts/deploy.sh D4`
 

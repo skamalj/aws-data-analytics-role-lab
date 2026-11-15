@@ -1,5 +1,6 @@
 # Mission D2: Manuals in, nothing out
 
+**Exam objective:** *Implement Amazon Bedrock Knowledge Bases with Aurora*
 **Skills:** Amazon Bedrock Knowledge Bases with **Aurora PostgreSQL + pgvector** as the vector store, vector dimensions vs embedding models, KB field mapping, HNSW and GIN indexes, the KB's database identity and IAM role, ingestion (sync) jobs
 **Time:** 45–60 minutes  |  **Needs:** `./scripts/deploy.sh base`, then `./scripts/deploy.sh D2`
 

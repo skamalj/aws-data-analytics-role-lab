@@ -26,3 +26,4 @@ if with_attr:
     print(f"example item expires in {secs / 86400:.1f} days")
 ok = ttl.get("TimeToLiveStatus") == "ENABLED" and len(with_attr) == len(items)
 print("TTL:", "PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)
