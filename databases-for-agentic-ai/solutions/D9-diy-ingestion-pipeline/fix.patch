@@ -1,0 +1,81 @@
+diff -ruN a/missions/D9-diy-ingestion-pipeline/db/schema.sql b/missions/D9-diy-ingestion-pipeline/db/schema.sql
+--- a/missions/D9-diy-ingestion-pipeline/db/schema.sql	2026-11-15 05:30:28.000000000 +0000
++++ b/missions/D9-diy-ingestion-pipeline/db/schema.sql	2026-11-15 05:31:26.087940231 +0000
+@@ -10,6 +10,10 @@
+   source_uri   text NOT NULL,
+   ingested_at  timestamptz NOT NULL DEFAULT now()
+ );
++-- one row per (document, chunk): clean up duplicates from earlier runs, then enforce it
++DELETE FROM knowledge.d9_chunks a USING knowledge.d9_chunks b
++ WHERE a.doc_key = b.doc_key AND a.chunk_no = b.chunk_no AND a.id < b.id;
++CREATE UNIQUE INDEX IF NOT EXISTS d9_chunks_doc_chunk_uq ON knowledge.d9_chunks (doc_key, chunk_no);
+ CREATE INDEX IF NOT EXISTS d9_chunks_embedding_idx ON knowledge.d9_chunks USING hnsw (embedding vector_cosine_ops);
+ GRANT USAGE ON SCHEMA knowledge TO bedrock_kb_user;
+ GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge.d9_chunks TO bedrock_kb_user;
+diff -ruN a/missions/D9-diy-ingestion-pipeline/lambdas/ingest.py b/missions/D9-diy-ingestion-pipeline/lambdas/ingest.py
+--- a/missions/D9-diy-ingestion-pipeline/lambdas/ingest.py	2026-11-15 05:30:28.000000000 +0000
++++ b/missions/D9-diy-ingestion-pipeline/lambdas/ingest.py	2026-11-15 05:31:26.088112912 +0000
+@@ -13,8 +13,10 @@
+ rds = boto3.client("rds-data")
+ bedrock = boto3.client("bedrock-runtime")
+ DB = {"resourceArn": os.environ["CLUSTER_ARN"], "secretArn": os.environ["DB_SECRET_ARN"], "database": os.environ["DB_NAME"]}
+-CHUNK_CHARS = int(os.environ.get("CHUNK_CHARS", "60000"))
+-OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "0"))
++# Titan Text Embeddings V2 accepts at most 8,192 tokens / 50,000 characters per call, and retrieval works
++# best with focused chunks: ~2,000 characters with 10% overlap so sentences at the edges aren't lost.
++CHUNK_CHARS = int(os.environ.get("CHUNK_CHARS", "2000"))
++OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "200"))
+ 
+ 
+ def chunks(text):
+@@ -33,12 +35,23 @@
+     key = urllib.parse.unquote_plus(event["detail"]["object"]["key"])
+     text = s3.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+     parts = chunks(text)
+-    for n, part in enumerate(parts):
+-        rds.execute_statement(
+-            sql="INSERT INTO knowledge.d9_chunks (doc_key, chunk_no, content, embedding, source_uri) "
+-                "VALUES (:k, :n, :c, CAST(:v AS vector), :u)",
+-            parameters=[{"name": "k", "value": {"stringValue": key}}, {"name": "n", "value": {"longValue": n}},
+-                        {"name": "c", "value": {"stringValue": part}}, {"name": "v", "value": {"stringValue": embed(part)}},
+-                        {"name": "u", "value": {"stringValue": f"s3://{bucket}/{key}"}}], **DB)
++    vectors = [embed(part) for part in parts]          # embed first: no long-running DB transaction around Bedrock calls
++    # Replace the document's chunks atomically: re-uploads (and shorter revisions) never leave duplicates or stale text.
++    tx = rds.begin_transaction(**DB)["transactionId"]
++    try:
++        rds.execute_statement(sql="DELETE FROM knowledge.d9_chunks WHERE doc_key = :k", transactionId=tx,
++                              parameters=[{"name": "k", "value": {"stringValue": key}}], **DB)
++        sets = [[{"name": "k", "value": {"stringValue": key}}, {"name": "n", "value": {"longValue": n}},
++                 {"name": "c", "value": {"stringValue": part}}, {"name": "v", "value": {"stringValue": vec}},
++                 {"name": "u", "value": {"stringValue": f"s3://{bucket}/{key}"}}] for n, (part, vec) in enumerate(zip(parts, vectors))]
++        for i in range(0, len(sets), 20):
++            rds.batch_execute_statement(
++                sql="INSERT INTO knowledge.d9_chunks (doc_key, chunk_no, content, embedding, source_uri) "
++                    "VALUES (:k, :n, :c, CAST(:v AS vector), :u)",
++                parameterSets=sets[i:i + 20], transactionId=tx, **DB)
++        rds.commit_transaction(resourceArn=DB["resourceArn"], secretArn=DB["secretArn"], transactionId=tx)
++    except Exception:
++        rds.rollback_transaction(resourceArn=DB["resourceArn"], secretArn=DB["secretArn"], transactionId=tx)
++        raise
+     print(json.dumps({"ingested": key, "chunks": len(parts), "chars": len(text)}))
+     return {"doc": key, "chunks": len(parts)}
+diff -ruN a/missions/D9-diy-ingestion-pipeline/terraform/main.tf b/missions/D9-diy-ingestion-pipeline/terraform/main.tf
+--- a/missions/D9-diy-ingestion-pipeline/terraform/main.tf	2026-11-15 05:30:59.000000000 +0000
++++ b/missions/D9-diy-ingestion-pipeline/terraform/main.tf	2026-11-15 05:31:26.087768460 +0000
+@@ -39,6 +39,7 @@
+   allowed_secret_arns = [local.db.kb_secret_arn]
+   timeout             = 300
+   memory_size         = 512
++  environment         = { CHUNK_CHARS = "2000", CHUNK_OVERLAP = "200" }
+   extra_policy_json = jsonencode({
+     Version = "2012-10-17"
+     Statement = [
+@@ -55,7 +56,7 @@
+     detail-type = ["Object Created"]
+     detail = {
+       bucket = { name = [aws_s3_bucket.docs.id] }
+-      object = { key = [{ suffix = ".txt" }] }
++      object = { key = [{ suffix = ".md" }, { suffix = ".txt" }] } # the content team publishes Markdown
+     }
+   })
+ }
