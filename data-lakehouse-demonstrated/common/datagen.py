@@ -84,3 +84,82 @@ def vendor_files():
     bad = [[h for h in header if h != "quantity"]] + [[c for i, c in enumerate(x) if i != 3] for x in rows(301, 351, "V-TALUS")]
     csv = lambda t: "\n".join(",".join(x) for x in t) + "\n"
     return {"northpine-2026-03-04.csv": csv(good1), "cairn-2026-03-04.csv": csv(good2), "talus-2026-03-04.csv": csv(bad)}
+
+
+# ----------------------------------------------------------------- governed data (C5, C6)
+FIRST = ["Ava", "Liam", "Maya", "Noah", "Zoe", "Omar", "Ines", "Kenji", "Lena", "Raj", "Sofia", "Tom"]
+LAST = ["Garcia", "Chen", "Muller", "Okafor", "Silva", "Tanaka", "Novak", "Haddad", "Rossi", "Kim"]
+SEGMENTS = ["outdoor-pro", "weekend", "family", "new"]
+
+
+def _customer(i, r):
+    f, l = r.choice(FIRST), r.choice(LAST)
+    return {"customer_id": f"C{i:05d}", "name": f"{f} {l}", "email": f"{f.lower()}.{l.lower()}{i}@example.com",
+            "phone": f"+1-555-{r.randint(1000, 9999)}", "region": REGIONS[i % 4], "segment": r.choice(SEGMENTS),
+            "marketing_opt_in": "true" if r.random() < 0.55 else "false", "credit_score": r.randint(520, 830),
+            "lifetime_value": round(r.uniform(50, 6000), 2)}
+
+
+def governed_c5():
+    """Tables for C5 (tag-based access control). Returns {table: (columns, rows)}."""
+    r = random.Random(505)
+    cust = [_customer(i, r) for i in range(1, 401)]
+    sessions = [{"session_id": f"W{i:06d}", "customer_id": f"C{r.randint(1, 400):05d}", "page": r.choice(["/", "/tents", "/boots", "/packs", "/sale"]),
+                 "duration_s": r.randint(5, 900), "device": r.choice(["mobile", "desktop", "tablet"])} for i in range(1, 1001)]
+    reviews = [{"review_id": f"R{i:05d}", "product_id": r.choice(PRODUCTS)[0], "rating": r.randint(1, 5),
+                "review_text": r.choice(["love it", "too heavy", "great value", "runs small", "would buy again"])} for i in range(1, 301)]
+    payroll = [{"employee_id": f"E{i:04d}", "name": f"{r.choice(FIRST)} {r.choice(LAST)}", "salary": r.randint(42000, 180000),
+                "bank_account": f"GB{r.randint(10**9, 10**10 - 1)}"} for i in range(1, 41)]
+    return {
+        "customers": (["customer_id", "name", "email", "phone", "region", "segment", "lifetime_value"], cust),
+        "web_sessions": (["session_id", "customer_id", "page", "duration_s", "device"], sessions),
+        "product_reviews": (["review_id", "product_id", "rating", "review_text"], reviews),
+        "payroll": (["employee_id", "name", "salary", "bank_account"], payroll),
+    }
+
+
+def governed_c6():
+    """customer_profiles for C6 (data cell filters)."""
+    r = random.Random(606)
+    cols = ["customer_id", "name", "email", "region", "segment", "marketing_opt_in", "credit_score", "lifetime_value"]
+    return cols, [_customer(i, r) for i in range(1, 601)]
+
+
+def write_csv(path, cols, rows):
+    with open(path, "w") as f:
+        for row in rows:
+            f.write(",".join(str(row[c]) for c in cols) + "\n")
+
+
+# ----------------------------------------------------------------- order status stream (C7)
+def order_status_waves():
+    """Three waves of CDC-style events for Firehose -> Iceberg. Returns (waves, expected {order_id: (status, amount)})."""
+    r = random.Random(707)
+    ids = [f"O-7{i:04d}" for i in range(1, 201)]
+    state, waves = {}, []
+
+    def ev(oid, status, amount, op, seq):
+        return {"order_id": oid, "status": status, "amount": amount, "updated_at": f"2026-03-10T{seq:02d}:00:00Z", "op": op}
+
+    w1 = []
+    for oid in ids:
+        amt = float(r.choice(PRODUCTS)[3])
+        state[oid] = ("PLACED", amt)
+        w1.append(ev(oid, "PLACED", amt, "insert", 8))
+    waves.append(w1)
+    upd = ids[:120]
+    w2 = []
+    for oid in upd:
+        st = r.choice(["PAID", "SHIPPED"])
+        state[oid] = (st, state[oid][1])
+        w2.append(ev(oid, st, state[oid][1], "update", 12))
+    waves.append(w2)
+    w3 = []
+    for oid in upd[:60]:
+        state[oid] = ("DELIVERED", state[oid][1])
+        w3.append(ev(oid, "DELIVERED", state[oid][1], "update", 18))
+    for oid in ids[180:]:                          # 20 test orders purged
+        state.pop(oid)
+        w3.append({"order_id": oid, "op": "delete"})
+    waves.append(w3)
+    return waves, state

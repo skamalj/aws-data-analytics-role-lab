@@ -1,0 +1,35 @@
+diff -ruN a/missions/C7-firehose-iceberg-upserts/terraform/main.tf b/missions/C7-firehose-iceberg-upserts/terraform/main.tf
+--- a/missions/C7-firehose-iceberg-upserts/terraform/main.tf	2026-11-15 06:50:27.000000000 +0000
++++ b/missions/C7-firehose-iceberg-upserts/terraform/main.tf	2026-11-15 06:50:53.592446530 +0000
+@@ -33,7 +33,7 @@
+   policy = jsonencode({
+     Version = "2012-10-17"
+     Statement = [
+-      { Effect = "Allow", Action = ["glue:GetTable", "glue:GetDatabase"],
++      { Effect = "Allow", Action = ["glue:GetTable", "glue:GetDatabase", "glue:UpdateTable"],
+         Resource = [local.catalog, "arn:aws:glue:${local.b.region}:${local.b.account_id}:database/${local.b.database}",
+       "arn:aws:glue:${local.b.region}:${local.b.account_id}:table/${local.b.database}/*"] },
+       { Effect = "Allow", Action = ["s3:AbortMultipartUpload", "s3:GetBucketLocation", "s3:GetObject", "s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:PutObject", "s3:DeleteObject"],
+@@ -54,11 +54,12 @@
+     buffering_interval = 60
+     buffering_size     = 1
+     retry_duration     = 60
+-    append_only        = true
++    append_only        = false
+ 
+     destination_table_configuration {
+       database_name          = local.b.database
+       table_name             = "order_status"
++      unique_keys            = ["order_id"]
+       s3_error_output_prefix = local.error_pref
+     }
+ 
+@@ -73,7 +74,7 @@
+         }
+         parameters {
+           parameter_name  = "MetadataExtractionQuery"
+-          parameter_value = "{destinationDatabaseName: \"${local.b.database}\", destinationTableName: \"order_status\", operation: .operation}"
++          parameter_value = "{destinationDatabaseName: \"${local.b.database}\", destinationTableName: \"order_status\", operation: .op}"
+         }
+       }
+     }

@@ -5,6 +5,9 @@
 >
 > And: [**Databases for Agentic AI: break-fix missions**](databases-for-agentic-ai/README.md), fourteen missions + a mock exam on
 > Aurora PostgreSQL/pgvector, Bedrock Knowledge Bases, DynamoDB checkpoints (`langgraph-dynamodb-checkpoint`), MCP servers, query tuning and multi-tenancy.
+>
+> And: [**Data Lakehouse Demonstrated: break-fix challenges**](data-lakehouse-demonstrated/README.md), seven challenges + a 110-minute mock exam on
+> Apache Iceberg (Glue, Athena), Step Functions/EventBridge pipelines, Lake Formation LF-Tags and data cell filters, and Firehose → Iceberg upserts.
 
 Twelve hands-on labs modelled on the **AWS Cloud Quest: Data Analytics** role, built to run in
 **your own AWS account**. Each lab has three parts:

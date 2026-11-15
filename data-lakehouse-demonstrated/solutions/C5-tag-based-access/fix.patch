@@ -1,0 +1,43 @@
+diff -ruN a/missions/C5-tag-based-access/terraform/main.tf b/missions/C5-tag-based-access/terraform/main.tf
+--- a/missions/C5-tag-based-access/terraform/main.tf	2026-11-15 06:46:46.000000000 +0000
++++ b/missions/C5-tag-based-access/terraform/main.tf	2026-11-15 06:47:47.539761928 +0000
+@@ -85,7 +85,7 @@
+ locals {
+   table_tags = {
+     web_sessions    = { domain = "web", sensitivity = "public" }
+-    product_reviews = { domain = "customer" }
++    product_reviews = { domain = "customer", sensitivity = "public" }
+     customers       = { domain = "customer", sensitivity = "confidential" }
+     payroll         = { domain = "hr", sensitivity = "confidential" }
+   }
+@@ -111,7 +111,7 @@
+   table_with_columns {
+     database_name = aws_glue_catalog_database.governed.name
+     name          = aws_glue_catalog_table.t["customers"].name
+-    column_names  = ["email"]
++    column_names  = ["email", "phone"]
+   }
+   lf_tag {
+     key   = "sensitivity"
+@@ -147,6 +147,10 @@
+   lf_tag_policy {
+     resource_type = "TABLE"
+     expression {
++      key    = "domain"
++      values = ["web", "customer"]
++    }
++    expression {
+       key    = "sensitivity"
+       values = ["public", "confidential"]
+     }
+@@ -161,8 +165,8 @@
+   lf_tag_policy {
+     resource_type = "TABLE"
+     expression {
+-      key    = "domain"
+-      values = ["web", "customer"]
++      key    = "sensitivity"
++      values = ["public"]
+     }
+   }
+   depends_on = [aws_lakeformation_lf_tag.domain, aws_lakeformation_lf_tag.sensitivity]
