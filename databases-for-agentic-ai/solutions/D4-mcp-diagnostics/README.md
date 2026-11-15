@@ -32,6 +32,23 @@ Any one layer alone would have stopped the canary `UPDATE`. Least privilege mean
 
 Diagnostics should show *shape* (types, nulls, example formats), not harvest data. Sampled PII ends up in coding-agent transcripts, terminals and tickets.
 
+## Part B solution: AWS Labs PostgreSQL MCP server
+
+```bash
+patch -p1 < solutions/D4-mcp-diagnostics/fix-part-b.patch
+python3 missions/D4-mcp-diagnostics/awslabs/render.py && python3 missions/D4-mcp-diagnostics/scenarios/check_awslabs.py
+```
+
+| Flag | Broken | Fixed | Why |
+|---|---|---|---|
+| `--connection_method` | `PG_WIRE_PROTOCOL` | `RDS_API` | The cluster is private with no inbound rules. A laptop can't open a PostgreSQL connection, but the Data API is an HTTPS AWS API |
+| `--secret_arn` | admin (`rds!cluster-…`) | `riverbend-db-diag-*` | Diagnostics read; they never need the owner of everything |
+| `--allow_write_query` | present | removed | Without it the server rejects non-read-only SQL. With it, an agent can run `UPDATE`/`DROP` |
+| `--privilege_check` | `off` | `enforce` | Refuses to start when the database role is a superuser or `rds_superuser` member, so swapping the secret back to admin fails loudly |
+
+On `create_cluster` and other management tools: the MCP server acts with the **engineer's AWS credentials**. Give the profile used by the coding
+agent a read-only IAM policy (no `rds:CreateDBCluster`, no `secretsmanager:GetSecretValue` on the admin secret). Server flags limit SQL; IAM limits AWS actions.
+
 ## Debrief answers
 
 1. Agents act autonomously and can be steered by injected content, such as a malicious row or a README. Whatever the server *can* do,

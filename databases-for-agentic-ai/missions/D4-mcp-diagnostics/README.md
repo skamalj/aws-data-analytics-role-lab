@@ -85,6 +85,30 @@ What happens with `limit: 100000`? Which columns of `commerce.customers` and whi
 - `IDENT` (schema.table validation) does its job against SQL injection through table names.
 - The cluster may be auto-paused. The first call can take ~30 s.
 
+## Part B: the official AWS Labs PostgreSQL MCP server
+
+**Exam objective:** *Configure the Aurora MCP server for agent debugging*
+
+Some engineers would rather use the official **AWS Labs PostgreSQL MCP server** ([`awslabs.postgres-mcp-server`](https://pypi.org/project/awslabs.postgres-mcp-server/),
+pinned to 1.2.4), started locally by their coding agent (Claude Code, Kiro, Amazon Q CLI…) from an MCP client configuration. A teammate
+shared [`awslabs/mcp.template.json`](awslabs/mcp.template.json): "works on my machine".
+
+```bash
+python3 missions/D4-mcp-diagnostics/awslabs/render.py          # fills in ARNs from the base stack -> awslabs/mcp.generated.json
+python3 missions/D4-mcp-diagnostics/scenarios/check_awslabs.py # needs uv (uvx) installed: https://docs.astral.sh/uv/
+```
+
+**Objectives:** the server connects to the private cluster from a laptop, uses the read-only `diag_readonly` identity, refuses write
+queries, and refuses to start as a privileged database user, so a future misconfiguration fails loudly.
+
+Useful server flags: `--connection_method` (`RDS_API` | `PG_WIRE_PROTOCOL` | `PG_WIRE_IAM_PROTOCOL`), `--secret_arn`, `--allow_write_query`
+(off unless given), `--privilege_check` (`warn` default | `enforce` | `off`). Run `uvx awslabs.postgres-mcp-server@1.2.4 --help` for the full list.
+
+<details><summary>Hint B1</summary>The cluster is in private subnets with no inbound rules. Which connection method needs no network path to it?</details>
+<details><summary>Hint B2</summary>Four of the arguments decide what an AI agent can do to your database. Read each one, and look at which secret is in the template.</details>
+
+Also think about: this server also exposes tools such as `create_cluster`. What limits them?
+
 ## Debrief questions
 
 1. Why is "the tool is only for engineers" not a security argument once it's an MCP server that agents call by themselves?

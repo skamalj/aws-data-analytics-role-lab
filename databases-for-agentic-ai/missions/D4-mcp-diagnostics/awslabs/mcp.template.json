@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "riverbend-postgres": {
+      "command": "uvx",
+      "args": [
+        "awslabs.postgres-mcp-server@1.2.4",
+        "--connection_method", "PG_WIRE_PROTOCOL",
+        "--db_cluster_arn", "{{CLUSTER_ARN}}",
+        "--db_type", "APG",
+        "--region", "{{REGION}}",
+        "--database", "riverbend",
+        "--secret_arn", "{{ADMIN_SECRET_ARN}}",
+        "--allow_write_query",
+        "--privilege_check", "off"
+      ],
+      "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
+    }
+  }
+}

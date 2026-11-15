@@ -7,3 +7,4 @@
 .session-*
 __pycache__/
 .rds-resume
+missions/*/awslabs/mcp.generated.json

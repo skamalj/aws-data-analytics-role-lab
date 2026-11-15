@@ -1,0 +1,21 @@
+diff -ruN a/missions/D4-mcp-diagnostics/awslabs/mcp.template.json b/missions/D4-mcp-diagnostics/awslabs/mcp.template.json
+--- a/missions/D4-mcp-diagnostics/awslabs/mcp.template.json	2026-11-15 05:44:00.417861250 +0000
++++ b/missions/D4-mcp-diagnostics/awslabs/mcp.template.json	2026-11-15 05:44:14.585954079 +0000
+@@ -4,14 +4,13 @@
+       "command": "uvx",
+       "args": [
+         "awslabs.postgres-mcp-server@1.2.4",
+-        "--connection_method", "PG_WIRE_PROTOCOL",
++        "--connection_method", "RDS_API",
+         "--db_cluster_arn", "{{CLUSTER_ARN}}",
+         "--db_type", "APG",
+         "--region", "{{REGION}}",
+         "--database", "riverbend",
+-        "--secret_arn", "{{ADMIN_SECRET_ARN}}",
+-        "--allow_write_query",
+-        "--privilege_check", "off"
++        "--secret_arn", "{{DIAG_SECRET_ARN}}",
++        "--privilege_check", "enforce"
+       ],
+       "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
+     }
