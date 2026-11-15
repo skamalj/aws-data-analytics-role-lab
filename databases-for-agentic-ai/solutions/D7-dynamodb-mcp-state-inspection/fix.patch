@@ -1,0 +1,94 @@
+diff -ruN a/missions/D7-dynamodb-mcp-state-inspection/mcp/server.py b/missions/D7-dynamodb-mcp-state-inspection/mcp/server.py
+--- a/missions/D7-dynamodb-mcp-state-inspection/mcp/server.py	2026-11-15 05:22:53.000000000 +0000
++++ b/missions/D7-dynamodb-mcp-state-inspection/mcp/server.py	2026-11-15 05:23:57.975045378 +0000
+@@ -7,6 +7,7 @@
+ """
+ import json
+ import os
++import re
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ 
+ import boto3
+@@ -26,6 +27,17 @@
+     return _saver
+ 
+ 
++MAX_MESSAGES, MAX_CHARS = 20, 500
++EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
++PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
++
++
++def redact(text):
++    text = EMAIL.sub("[EMAIL]", str(text))
++    text = PHONE.sub("[PHONE]", text)
++    return text if len(text) <= MAX_CHARS else text[:MAX_CHARS] + f"... [{len(text) - MAX_CHARS} more chars]"
++
++
+ def cfg(thread_id):
+     return {"configurable": {"thread_id": str(thread_id), "checkpoint_ns": ""}}
+ 
+@@ -55,9 +67,10 @@
+     if not tup:
+         return {"error": "no checkpoint for this thread"}
+     msgs = tup.checkpoint.get("channel_values", {}).get("messages", [])
++    last_n = max(1, min(int(args.get("last_n", 10)), MAX_MESSAGES))
+     return {"thread_id": args["thread_id"], "checkpoint_id": tup.config["configurable"]["checkpoint_id"],
+-            "step": tup.metadata.get("step"), "message_count": len(msgs),
+-            "messages": [{"type": m.type, "content": m.content} for m in msgs]}
++            "step": tup.metadata.get("step"), "message_count": len(msgs), "showing_last": min(last_n, len(msgs)),
++            "messages": [{"type": m.type, "content": redact(m.content)} for m in msgs[-last_n:]]}
+ 
+ 
+ def list_checkpoints(args):
+@@ -76,23 +89,16 @@
+     return {"thread_id": args["thread_id"], "items": len(sizes), "largest_bytes_approx": sizes[:5]}
+ 
+ 
+-def delete_thread(args):
+-    saver().delete_thread(str(args["thread_id"]))
+-    return {"deleted": args["thread_id"]}
+-
+-
+ TOOLS = {
+     "describe_memory_table": (describe_memory_table, "Key schema, size and TTL settings of the agent-memory table.", {}, []),
+     "list_threads": (list_threads, "List conversation thread ids stored in agent memory.",
+                      {"limit": {"type": "integer"}}, []),
+-    "get_conversation": (get_conversation, "Show the latest checkpointed conversation state of a thread.",
+-                         {"thread_id": {"type": "string"}}, ["thread_id"]),
++    "get_conversation": (get_conversation, "Show the last messages (max 20, redacted, truncated) of a thread's latest checkpoint.",
++                         {"thread_id": {"type": "string"}, "last_n": {"type": "integer"}}, ["thread_id"]),
+     "list_checkpoints": (list_checkpoints, "List recent checkpoints of a thread (id, step, message count).",
+                          {"thread_id": {"type": "string"}, "limit": {"type": "integer"}}, ["thread_id"]),
+     "item_sizes": (item_sizes, "Approximate stored item sizes of a thread (400 KB item-limit check).",
+                    {"thread_id": {"type": "string"}}, ["thread_id"]),
+-    "delete_thread": (delete_thread, "Delete a thread's state (cleanup during debugging).",
+-                      {"thread_id": {"type": "string"}}, ["thread_id"]),
+ }
+ 
+ 
+diff -ruN a/missions/D7-dynamodb-mcp-state-inspection/terraform/main.tf b/missions/D7-dynamodb-mcp-state-inspection/terraform/main.tf
+--- a/missions/D7-dynamodb-mcp-state-inspection/terraform/main.tf	2026-11-15 05:23:30.000000000 +0000
++++ b/missions/D7-dynamodb-mcp-state-inspection/terraform/main.tf	2026-11-15 05:23:58.005143951 +0000
+@@ -34,9 +34,10 @@
+ 
+ data "aws_iam_policy_document" "inspector" {
+   statement {
+-    sid       = "AgentMemory"
+-    actions   = ["dynamodb:*"]
+-    resources = ["arn:aws:dynamodb:${var.region}:${module.base.account_id}:table/${local.p}-*"]
++    sid = "AgentMemory"
++    # read-only, one table. No CreateTable: a wrong table name must fail loudly, not create a new table.
++    actions   = ["dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
++    resources = [aws_dynamodb_table.memory.arn]
+   }
+ }
+ 
+@@ -74,7 +75,7 @@
+   }
+ 
+   environment_variables = {
+-    CHECKPOINT_TABLE = "${local.p}-checkpoint"
++    CHECKPOINT_TABLE = aws_dynamodb_table.memory.name
+   }
+ 
+   depends_on = [aws_iam_role_policy.inspector]
