@@ -9,7 +9,9 @@ if [[ "$ID" == "base" ]]; then
   terraform -chdir="$ROOT/base/terraform" destroy "${APPROVE[@]}" "$@"; exit 0
 fi
 MDIR="$(ls -d "$ROOT"/missions/"${ID^^}"-* 2>/dev/null | head -1)"
-[[ -f "$MDIR/terraform/build/agent.zip" ]] || "$ROOT/common/build_agent.sh" "$MDIR"
-terraform -chdir="$MDIR/terraform" destroy "${APPROVE[@]}" "$@"
+if [[ -d "$MDIR/terraform" ]]; then
+  if grep -q agent_base "$MDIR"/terraform/*.tf && [[ ! -f "$MDIR/terraform/build/agent.zip" ]]; then "$ROOT/common/build_agent.sh" "$MDIR"; fi
+  terraform -chdir="$MDIR/terraform" destroy "${APPROVE[@]}" "$@"
+fi
 if [[ -f "$MDIR/teardown.py" ]]; then python3 "$MDIR/teardown.py"; fi
 rm -f "$ROOT/.session-${ID^^}"

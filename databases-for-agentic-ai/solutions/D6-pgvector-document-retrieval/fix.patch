@@ -1,0 +1,25 @@
+diff -ruN a/missions/D6-pgvector-document-retrieval/db/schema.sql b/missions/D6-pgvector-document-retrieval/db/schema.sql
+--- a/missions/D6-pgvector-document-retrieval/db/schema.sql	2026-11-15 05:20:17.000000000 +0000
++++ b/missions/D6-pgvector-document-retrieval/db/schema.sql	2026-11-15 05:21:48.476174211 +0000
+@@ -13,7 +13,8 @@
+ 
+ -- Approximate nearest-neighbour index for the search_docs tool
+ DROP INDEX IF EXISTS knowledge.doc_chunks_embedding_idx;
+-CREATE INDEX doc_chunks_embedding_idx ON knowledge.doc_chunks USING hnsw (embedding vector_l2_ops);
++CREATE INDEX doc_chunks_embedding_idx ON knowledge.doc_chunks USING hnsw (embedding vector_cosine_ops);   -- operator class must match the query operator <=> (cosine)
+ 
+ -- The agent's tools log in as trail_desk_app
+ GRANT USAGE ON SCHEMA knowledge TO trail_desk_app;
++GRANT SELECT ON knowledge.doc_chunks TO trail_desk_app;     -- read-only: ingestion runs under a different identity
+diff -ruN a/missions/D6-pgvector-document-retrieval/ingest.py b/missions/D6-pgvector-document-retrieval/ingest.py
+--- a/missions/D6-pgvector-document-retrieval/ingest.py	2026-11-15 05:20:17.000000000 +0000
++++ b/missions/D6-pgvector-document-retrieval/ingest.py	2026-11-15 05:21:48.476029122 +0000
+@@ -15,7 +15,7 @@
+ from dbsql import Db  # noqa: E402
+ from embed import chunk_markdown, embed, to_pgvector  # noqa: E402
+ 
+-EMBED_DIMENSIONS = 512          # smaller vectors are cheaper to store and faster to search
++EMBED_DIMENSIONS = 1024         # must match the column type vector(1024) AND the query-side embeddings in the tool
+ 
+ db = Db("admin")
+ os.environ.setdefault("AWS_REGION", db.o["region"])

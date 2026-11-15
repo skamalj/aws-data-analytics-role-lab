@@ -14,11 +14,16 @@ if [[ "$ID" == "base" ]]; then
 fi
 MDIR="$(ls -d "$ROOT"/missions/"${ID^^}"-* 2>/dev/null | head -1)"
 [[ -n "$MDIR" ]] || { echo "no mission $ID"; exit 1; }
-if grep -q terraform_remote_state "$MDIR"/terraform/*.tf && [[ ! -s "$ROOT/base/terraform/terraform.tfstate" ]]; then
+NEEDS_BASE=0
+if [[ ! -d "$MDIR/terraform" ]] || grep -q terraform_remote_state "$MDIR"/terraform/*.tf; then NEEDS_BASE=1; fi
+if [[ "$NEEDS_BASE" == 1 && ! -s "$ROOT/base/terraform/terraform.tfstate" ]]; then
   echo "Mission ${ID^^} uses the shared database: run ./scripts/deploy.sh base first."; exit 1
 fi
-"$ROOT/common/build_agent.sh" "$MDIR"
+if [[ -d "$MDIR/terraform" ]] && grep -q agent_base "$MDIR"/terraform/*.tf; then "$ROOT/common/build_agent.sh" "$MDIR"; fi
 if [[ -f "$MDIR/setup.py" ]]; then echo ">> database setup ($MDIR/setup.py)"; python3 "$MDIR/setup.py"; fi
-terraform -chdir="$MDIR/terraform" init -input=false -upgrade >/dev/null
-terraform -chdir="$MDIR/terraform" apply "${APPROVE[@]}" "$@"
+if [[ -d "$MDIR/terraform" ]]; then
+  terraform -chdir="$MDIR/terraform" init -input=false -upgrade >/dev/null
+  terraform -chdir="$MDIR/terraform" apply "${APPROVE[@]}" "$@"
+fi
+if [[ -f "$MDIR/post_deploy.py" ]]; then echo ">> post-deploy ($MDIR/post_deploy.py)"; python3 "$MDIR/post_deploy.py"; fi
 echo ">> Deployed ${ID^^}. Handout: ${MDIR#$ROOT/}/README.md"
