@@ -1,0 +1,86 @@
+diff -ruN a/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.md.metadata.json b/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.md.metadata.json
+--- a/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.md.metadata.json	1970-01-01 00:00:00.000000000 +0000
++++ b/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.md.metadata.json	2026-11-15 05:38:40.000000000 +0000
+@@ -0,0 +1,7 @@
++{
++  "metadataAttributes": {
++    "tenant_id": "coastline",
++    "audience": "customer",
++    "doc_type": "membership"
++  }
++}
+\ No newline at end of file
+diff -ruN a/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.metadata.json b/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.metadata.json
+--- a/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.metadata.json	2026-11-15 05:38:40.000000000 +0000
++++ b/missions/D13-multi-tenant-kb-metadata/docs/coastline/membership.metadata.json	1970-01-01 00:00:00.000000000 +0000
+@@ -1,7 +0,0 @@
+-{
+-  "metadataAttributes": {
+-    "tenant_id": "coastline",
+-    "audience": "customer",
+-    "doc_type": "membership"
+-  }
+-}
+\ No newline at end of file
+diff -ruN a/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.md.metadata.json b/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.md.metadata.json
+--- a/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.md.metadata.json	1970-01-01 00:00:00.000000000 +0000
++++ b/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.md.metadata.json	2026-11-15 05:38:40.000000000 +0000
+@@ -0,0 +1,7 @@
++{
++  "metadataAttributes": {
++    "tenant_id": "coastline",
++    "audience": "customer",
++    "doc_type": "returns"
++  }
++}
+\ No newline at end of file
+diff -ruN a/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.metadata.json b/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.metadata.json
+--- a/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.metadata.json	2026-11-15 05:38:40.000000000 +0000
++++ b/missions/D13-multi-tenant-kb-metadata/docs/coastline/returns.metadata.json	1970-01-01 00:00:00.000000000 +0000
+@@ -1,7 +0,0 @@
+-{
+-  "metadataAttributes": {
+-    "tenant_id": "coastline",
+-    "audience": "customer",
+-    "doc_type": "returns"
+-  }
+-}
+\ No newline at end of file
+diff -ruN a/missions/D13-multi-tenant-kb-metadata/docs/peak-gear/returns.md.metadata.json b/missions/D13-multi-tenant-kb-metadata/docs/peak-gear/returns.md.metadata.json
+--- a/missions/D13-multi-tenant-kb-metadata/docs/peak-gear/returns.md.metadata.json	2026-11-15 05:38:40.000000000 +0000
++++ b/missions/D13-multi-tenant-kb-metadata/docs/peak-gear/returns.md.metadata.json	2026-11-15 05:39:33.614482786 +0000
+@@ -1,5 +1,7 @@
+ {
+-  "tenant_id": "peak-gear",
+-  "audience": "customer",
+-  "doc_type": "returns"
++  "metadataAttributes": {
++    "tenant_id": "peak-gear",
++    "audience": "customer",
++    "doc_type": "returns"
++  }
+ }
+\ No newline at end of file
+diff -ruN a/missions/D13-multi-tenant-kb-metadata/lambdas/partner_search.py b/missions/D13-multi-tenant-kb-metadata/lambdas/partner_search.py
+--- a/missions/D13-multi-tenant-kb-metadata/lambdas/partner_search.py	2026-11-15 05:38:40.000000000 +0000
++++ b/missions/D13-multi-tenant-kb-metadata/lambdas/partner_search.py	2026-11-15 05:39:33.614589436 +0000
+@@ -13,13 +13,17 @@
+ 
+ def handler(event, context):
+     args = event.get("args", {})
+-    tenant = args.get("tenant_id") or event.get("context", {}).get("tenant_id")
++    tenant = event.get("context", {}).get("tenant_id")      # ONLY the authenticated context, never model arguments
++    if not tenant:
++        return {"error": "no authenticated tenant", "results": []}
+     r = kb.retrieve(
+         knowledgeBaseId=os.environ["KB_ID"],
+         retrievalQuery={"text": str(args.get("query", ""))},
+         retrievalConfiguration={"vectorSearchConfiguration": {
+             "numberOfResults": 4,
+-            "filter": {"equals": {"key": "tenant", "value": tenant}},
++            # keys must match the metadataAttributes names in the .metadata.json sidecars
++            "filter": {"andAll": [{"equals": {"key": "tenant_id", "value": tenant}},
++                                  {"equals": {"key": "audience", "value": "customer"}}]},
+         }})
+     hits = [{"text": x["content"]["text"][:300], "source": x["location"]["s3Location"]["uri"],
+              "tenant_id": (x.get("metadata") or {}).get("tenant_id")} for x in r["retrievalResults"]]
