@@ -1,0 +1,47 @@
+diff -ruN a/missions/D12-multi-tenant-rls/db/tenancy.sql b/missions/D12-multi-tenant-rls/db/tenancy.sql
+--- a/missions/D12-multi-tenant-rls/db/tenancy.sql	2026-11-15 05:36:33.000000000 +0000
++++ b/missions/D12-multi-tenant-rls/db/tenancy.sql	2026-11-15 05:37:29.686325904 +0000
+@@ -30,5 +30,12 @@
+ CREATE POLICY tenant_isolation ON saas.tenant_docs
+   USING (tenant_id = current_setting('app.tenant_id', true));
+ 
+--- The SaaS service owns its table so its migrations can run without the DBA
+-ALTER TABLE saas.tenant_docs OWNER TO saas_app;
++-- Table owners bypass row-level security. The service only READS; ownership stays with the admin,
++-- and FORCE makes even the owner subject to the policy (defence in depth).
++ALTER TABLE saas.tenant_docs FORCE ROW LEVEL SECURITY;
++GRANT SELECT ON saas.tenant_docs TO saas_app;
++
++-- Filtered vector search: the HNSW scan yields at most ef_search candidates BEFORE the tenant filter.
++-- With 20 tenants (~5 % each) the default 40 leaves ~2 rows; 400 leaves ~20 for a LIMIT 10.
++-- (pgvector >= 0.8, e.g. Aurora PostgreSQL 16.6+: hnsw.iterative_scan = relaxed_order keeps scanning instead.)
++ALTER ROLE saas_app SET hnsw.ef_search = 400;
+diff -ruN a/missions/D12-multi-tenant-rls/lambdas/tenant_search.py b/missions/D12-multi-tenant-rls/lambdas/tenant_search.py
+--- a/missions/D12-multi-tenant-rls/lambdas/tenant_search.py	2026-11-15 05:36:33.000000000 +0000
++++ b/missions/D12-multi-tenant-rls/lambdas/tenant_search.py	2026-11-15 05:37:29.686428331 +0000
+@@ -16,11 +16,18 @@
+     tenant = str(event["tenant_id"])
+     doc_id = int(event["doc_id"])          # "more like this document"
+     k = max(1, min(int(event.get("k", 10)), 50))
+-    rds.execute_statement(sql="SELECT set_config('app.tenant_id', :t, false)",
+-                          parameters=[{"name": "t", "value": {"stringValue": tenant}}], **DB)
+-    r = rds.execute_statement(
+-        sql="SELECT id, tenant_id, title FROM saas.tenant_docs "
+-            "ORDER BY embedding <=> (SELECT embedding FROM saas.tenant_docs WHERE id = :id) LIMIT :k",
+-        parameters=[{"name": "id", "value": {"longValue": doc_id}}, {"name": "k", "value": {"longValue": k}}],
+-        formatRecordsAs="JSON", **DB)
++    # Every Data API call can run on a different (pooled) connection: a setting made in one call is
++    # NOT reliably visible in the next one - and a non-local setting may even leak to another request.
++    # Set the tenant and run the query in ONE transaction, with is_local = true.
++    tx = rds.begin_transaction(**DB)["transactionId"]
++    try:
++        rds.execute_statement(sql="SELECT set_config('app.tenant_id', :t, true)", transactionId=tx,
++                              parameters=[{"name": "t", "value": {"stringValue": tenant}}], **DB)
++        r = rds.execute_statement(
++            sql="SELECT id, tenant_id, title FROM saas.tenant_docs "
++                "ORDER BY embedding <=> (SELECT embedding FROM saas.tenant_docs WHERE id = :id) LIMIT :k",
++            parameters=[{"name": "id", "value": {"longValue": doc_id}}, {"name": "k", "value": {"longValue": k}}],
++            formatRecordsAs="JSON", transactionId=tx, **DB)
++    finally:
++        rds.commit_transaction(resourceArn=DB["resourceArn"], secretArn=DB["secretArn"], transactionId=tx)
+     return {"tenant_id": tenant, "results": json.loads(r.get("formattedRecords") or "[]")}
