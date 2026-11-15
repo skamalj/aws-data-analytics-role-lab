@@ -1,0 +1,13 @@
+.env
+.env.bak
+*_result.json
+comparison_results.json
+sample_*.json
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars

@@ -1,0 +1,10 @@
+boto3>=1.35
+python-dotenv>=1.0
+neo4j>=5.20
+opensearch-py>=2.6
+requests>=2.31
+psycopg2-binary>=2.9
+mcp>=1.2
+jupyterlab>=4.0
+pytest>=8.0
+moto[dynamodb]>=5.0

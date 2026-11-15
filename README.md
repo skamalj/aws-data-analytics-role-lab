@@ -11,6 +11,9 @@
 >
 > And: [**Securing Agent Identities Demonstrated: break-fix challenges**](securing-agent-identities/README.md), six challenges + a 135-minute mock exam on
 > AgentCore workload identities (ABAC, self-hosted EC2 agents), scoped JWT and SigV4 inbound paths, JWT migration, and CloudTrail/CloudWatch detection.
+>
+> And: [**Graph Memory Agent lab**](graph-memory-agent-lab/README.md), five goals as interactive Jupyter notebooks run from your laptop:
+> DynamoDB agent memory + MCP tools, an IAM ownership boundary, a Neo4j ontology, hybrid RRF retrieval (OpenSearch Serverless + Aurora pgvector), and a Cypher guard.
 
 Twelve hands-on labs modelled on the **AWS Cloud Quest: Data Analytics** role, built to run in
 **your own AWS account**. Each lab has three parts:
