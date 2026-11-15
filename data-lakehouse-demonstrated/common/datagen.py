@@ -70,3 +70,17 @@ def supplier_feed_v2():
                      "category": cats[(n // 6) % 6], "price": round(19 + n % 480 + r.choice([0.49, 0.95, 0.99]), 2),
                      "stock": n % 250, "brand": r.choice(brands)})
     return rows
+
+
+def vendor_files():
+    """Three vendor shipment files for C3: two valid, one missing a required column."""
+    r = random.Random(303)
+    header = ["shipment_id", "vendor_id", "product_id", "quantity", "shipped_at"]
+
+    def rows(lo, hi, vendor):
+        return [[f"SH{n:05d}", vendor, r.choice(PRODUCTS)[0], str(r.randint(5, 200)), ts(r.randint(1, 28), r)] for n in range(lo, hi)]
+    good1 = [header] + rows(1, 151, "V-NORTHPINE")
+    good2 = [header] + rows(151, 301, "V-CAIRN")
+    bad = [[h for h in header if h != "quantity"]] + [[c for i, c in enumerate(x) if i != 3] for x in rows(301, 351, "V-TALUS")]
+    csv = lambda t: "\n".join(",".join(x) for x in t) + "\n"
+    return {"northpine-2026-03-04.csv": csv(good1), "cairn-2026-03-04.csv": csv(good2), "talus-2026-03-04.csv": csv(bad)}

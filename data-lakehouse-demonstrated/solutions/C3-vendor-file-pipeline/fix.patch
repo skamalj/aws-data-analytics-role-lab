@@ -1,0 +1,39 @@
+diff -ruN a/missions/C3-vendor-file-pipeline/terraform/main.tf b/missions/C3-vendor-file-pipeline/terraform/main.tf
+--- a/missions/C3-vendor-file-pipeline/terraform/main.tf	2026-11-15 06:36:31.000000000 +0000
++++ b/missions/C3-vendor-file-pipeline/terraform/main.tf	2026-11-15 06:37:03.481311617 +0000
+@@ -11,7 +11,7 @@
+ # ----------------------------------------------------------------- S3 events
+ resource "aws_s3_bucket_notification" "raw" {
+   bucket      = local.b.raw_bucket
+-  eventbridge = false
++  eventbridge = true # S3 only publishes "Object Created" events to EventBridge when this is on
+ }
+ 
+ # ----------------------------------------------------------------- validation Lambda
+@@ -115,7 +115,7 @@
+       }
+       IsValid = {
+         Type    = "Choice"
+-        Choices = [{ Variable = "$.validation.valid", StringEquals = "true", Next = "Load" }]
++        Choices = [{ Variable = "$.validation.valid", BooleanEquals = true, Next = "Load" }] # the Lambda returns a JSON boolean
+         Default = "Quarantine"
+       }
+       Load = {
+@@ -123,7 +123,7 @@
+         Resource = "arn:aws:states:::glue:startJobRun.sync"
+         Parameters = {
+           JobName   = module.vendor_load.job_name
+-          Arguments = { "--source_bucket.$" = "$.detail.bucket.name", "--input_key.$" = "$.detail.object.key" }
++          Arguments = { "--source_bucket.$" = "$.detail.bucket.name", "--source_key.$" = "$.detail.object.key" }
+         }
+         ResultPath = "$.load"
+         Next       = "CopyToProcessed"
+@@ -190,7 +190,7 @@
+     detail-type = ["Object Created"]
+     detail = {
+       bucket = { name = [local.b.raw_bucket] }
+-      object = { key = [{ prefix = "vendor/incoming/" }] }
++      object = { key = [{ prefix = "vendors/incoming/" }] } # NOT processed/ or quarantine/ - those writes would loop
+     }
+   })
+ }
