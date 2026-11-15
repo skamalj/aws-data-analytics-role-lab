@@ -1,0 +1,33 @@
+diff -ruN a/missions/D10-vector-index-recall/db/setup.sql b/missions/D10-vector-index-recall/db/setup.sql
+--- a/missions/D10-vector-index-recall/db/setup.sql	2026-11-15 05:32:59.608817084 +0000
++++ b/missions/D10-vector-index-recall/db/setup.sql	2026-11-15 05:33:35.948678449 +0000
+@@ -7,15 +7,16 @@
+ CREATE TABLE vectors.reviews_ivf  (id int PRIMARY KEY, embedding vector(128) NOT NULL);
+ CREATE TABLE vectors.reviews_hnsw (id int PRIMARY KEY, embedding vector(128) NOT NULL);
+ 
+--- IVFFlat: inverted lists over k-means centroids
+-CREATE INDEX reviews_ivf_idx ON vectors.reviews_ivf USING ivfflat (embedding vector_cosine_ops) WITH (lists = 1000);
+-
+ INSERT INTO vectors.reviews_ivf
+ SELECT g, (SELECT array_agg(sin((g % 250) * 1.37 + d * 0.91) * cos((g % 250) * 0.11 * d) + (random() - 0.5) * 0.6)::vector
+            FROM generate_series(1, 128) AS d WHERE g > 0)       -- ~250 topics, each review = topic + noise
+ FROM generate_series(1, 20000) g;
+ INSERT INTO vectors.reviews_hnsw SELECT id, embedding FROM vectors.reviews_ivf;
+ 
++-- IVFFlat: inverted lists over k-means centroids. Build it AFTER loading, so k-means sees real data;
++-- lists ~ rows / 1000 (up to 1M rows), here ~sqrt(20,000) = 141.
++CREATE INDEX reviews_ivf_idx ON vectors.reviews_ivf USING ivfflat (embedding vector_cosine_ops) WITH (lists = 141);
++
+ -- HNSW: proximity graph
+ CREATE INDEX reviews_hnsw_idx ON vectors.reviews_hnsw USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+ ANALYZE vectors.reviews_ivf;
+@@ -25,5 +26,7 @@
+ GRANT SELECT ON vectors.reviews_ivf, vectors.reviews_hnsw TO trail_desk_app;
+ 
+ -- Search settings for the application identity
+-ALTER ROLE trail_desk_app SET ivfflat.probes = 1;
+-ALTER ROLE trail_desk_app RESET hnsw.ef_search;
++-- probes ~ sqrt(lists): search 12 of 141 lists (higher = better recall, slower)
++ALTER ROLE trail_desk_app SET ivfflat.probes = 12;
++-- ef_search must be >= the LIMIT the application asks for (an HNSW scan returns at most ef_search rows)
++ALTER ROLE trail_desk_app SET hnsw.ef_search = 200;
