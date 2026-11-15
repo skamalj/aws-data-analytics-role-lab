@@ -1,0 +1,43 @@
+diff -ruN a/missions/C4-query-performance-sla/sql/dashboard.sql b/missions/C4-query-performance-sla/sql/dashboard.sql
+--- a/missions/C4-query-performance-sla/sql/dashboard.sql	2026-11-15 06:39:54.000000000 +0000
++++ b/missions/C4-query-performance-sla/sql/dashboard.sql	2026-11-15 06:42:27.078312790 +0000
+@@ -1,20 +1,19 @@
+ -- Q1: March revenue by region (finance dashboard, first tile)
+ SELECT region, round(sum(amount), 2) AS revenue
+ FROM riverbend_lakehouse.sales
+-WHERE date_format(sold_at, '%Y-%m') = '2026-03'
++WHERE sold_at >= TIMESTAMP '2026-03-01 00:00:00' AND sold_at < TIMESTAMP '2026-04-01 00:00:00'
+ GROUP BY region
+ ORDER BY revenue DESC;
+ 
+ -- Q2: top 3 products in the last week of March
+-SELECT *
+-FROM (SELECT product_id, round(sum(amount), 2) AS revenue
+-      FROM riverbend_lakehouse.sales
+-      WHERE date_format(sold_at, '%Y-%m-%d') BETWEEN '2026-03-25' AND '2026-03-31'
+-      GROUP BY product_id)
++SELECT product_id, round(sum(amount), 2) AS revenue
++FROM riverbend_lakehouse.sales
++WHERE sold_at >= TIMESTAMP '2026-03-25 00:00:00' AND sold_at < TIMESTAMP '2026-04-01 00:00:00'
++GROUP BY product_id
+ ORDER BY revenue DESC
+ LIMIT 3;
+ 
+ -- Q3: one store, one day (store manager view)
+ SELECT round(sum(amount), 2) AS revenue, count(*) AS sales
+ FROM riverbend_lakehouse.sales
+-WHERE format_datetime(sold_at, 'yyyy-MM-dd') = '2026-03-15' AND store_id = 'S07';
++WHERE sold_at >= TIMESTAMP '2026-03-15 00:00:00' AND sold_at < TIMESTAMP '2026-03-16 00:00:00' AND store_id = 'S07';
+diff -ruN a/missions/C4-query-performance-sla/sql/maintenance.sql b/missions/C4-query-performance-sla/sql/maintenance.sql
+--- a/missions/C4-query-performance-sla/sql/maintenance.sql	2026-11-15 06:39:54.000000000 +0000
++++ b/missions/C4-query-performance-sla/sql/maintenance.sql	2026-11-15 06:42:27.078212376 +0000
+@@ -1,2 +1,8 @@
+ -- Spark SQL run by the maintenance job (scenarios/run_maintenance.py). Tables: glue_catalog.riverbend_lakehouse.<table>
+-SELECT count(*) FROM glue_catalog.riverbend_lakehouse.sales;
++-- 1. the table told every writer - including compaction - to produce 128 KB files; target 512 MB instead,
++--    and let writers cluster rows by partition (one file per partition per write, not one per task)
++ALTER TABLE glue_catalog.riverbend_lakehouse.sales SET TBLPROPERTIES ('write.target-file-size-bytes' = '536870912', 'write.distribution-mode' = 'hash');
++-- 2. compact the ~36,000 small files
++CALL glue_catalog.system.rewrite_data_files(table => 'riverbend_lakehouse.sales', strategy => 'binpack', options => map('min-input-files', '2'));
++-- 3. expire old snapshots so planning no longer walks their manifests (and the old small files can be deleted)
++CALL glue_catalog.system.expire_snapshots(table => 'riverbend_lakehouse.sales', older_than => TIMESTAMP '2100-01-01 00:00:00', retain_last => 1);
