@@ -1,0 +1,10 @@
+output "region" { value = var.region }
+output "account_id" { value = data.aws_caller_identity.me.account_id }
+output "raw_bucket" { value = aws_s3_bucket.raw.id }
+output "lake_bucket" { value = aws_s3_bucket.lake.id }
+output "scripts_bucket" { value = aws_s3_bucket.scripts.id }
+output "athena_workgroup" { value = aws_athena_workgroup.lh.name }
+output "database" { value = aws_glue_catalog_database.lakehouse.name }
+output "glue_role_arn" { value = aws_iam_role.glue.arn }
+output "glue_role_name" { value = aws_iam_role.glue.name }
+output "warehouse" { value = "s3://${aws_s3_bucket.lake.id}/warehouse/" }
